@@ -139,6 +139,26 @@ impl State {
         Ok((name, api))
     }
 
+    /// An instance's checked config by name, selected or not: a replay goes to
+    /// the API its request went to.
+    pub fn api_named(&self, name: &str) -> Result<Arc<Api>, String> {
+        self.apis
+            .get(name)
+            .and_then(Option::as_ref)
+            .map(Arc::clone)
+            .ok_or_else(|| format!("\"{name}\" is not an API instance"))
+    }
+
+    /// What a failing step adds to its dump: the last exchange, once there is
+    /// one. A handle without an API instance (`srp`) answers nothing, so its
+    /// steps never show an exchange a second time.
+    pub fn failure_context(&self) -> Vec<serde_json::Value> {
+        if !self.apis.values().any(Option::is_some) {
+            return Vec::new();
+        }
+        self.exchange.iter().map(crate::send::diagnostic).collect()
+    }
+
     /// Whether the selected instance masks this header's value.
     pub fn is_sensitive(&self, header: &str) -> bool {
         self.selected().is_ok_and(|(_, api)| {
@@ -216,6 +236,36 @@ mod tests {
             ("main".to_string(), Some(api(("x-a", "1")))),
             ("other".to_string(), Some(api(("x-b", "2")))),
         ]))
+    }
+
+    fn an_exchange() -> Exchange {
+        Exchange {
+            method: "GET".into(),
+            url: "http://x/".into(),
+            request_headers: Vec::new(),
+            request_body: None,
+            request_form: BodyForm::Raw,
+            status: 200,
+            response_headers: Vec::new(),
+            response_body: String::new(),
+            duration_us: 0,
+            api: "main".into(),
+            sensitive_headers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_failure_context_is_the_last_exchange_of_an_api_handle_and_nothing_else() {
+        let mut s = state();
+        assert!(s.failure_context().is_empty(), "nothing sent yet");
+        s.exchange = Some(an_exchange());
+        let context = s.failure_context();
+        assert_eq!(context.len(), 1);
+        assert_eq!(context[0]["kind"], "http");
+        assert_eq!(context[0]["resource"], "main");
+        let mut srp = State::new(BTreeMap::from([("main".to_string(), None)]));
+        srp.exchange = Some(an_exchange());
+        assert!(srp.failure_context().is_empty(), "an srp handle shows none");
     }
 
     #[test]

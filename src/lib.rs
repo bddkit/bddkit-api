@@ -2,8 +2,10 @@
 //! response assertions and SRP. Written against docs/plugin-authoring.md; it
 //! must never need the host's source.
 
+mod assert;
 pub mod config;
 pub mod header;
+mod markup;
 mod reply;
 mod runtime;
 mod send;
@@ -286,8 +288,12 @@ pub extern "C" fn bddkit_reset_scenario(handle: u64) -> *mut c_char {
 
 /// What a failing step adds to its dump: the last exchange, once there is one.
 #[unsafe(no_mangle)]
-pub extern "C" fn bddkit_failure_context(_handle: u64) -> *mut c_char {
-    guard(PANIC_DIAGNOSTICS, || PANIC_DIAGNOSTICS.to_string())
+pub extern "C" fn bddkit_failure_context(handle: u64) -> *mut c_char {
+    guard(PANIC_DIAGNOSTICS, move || {
+        let diagnostics =
+            state_of(handle).map_or_else(Vec::new, |state| locked(&state).failure_context());
+        serde_json::json!({"diagnostics": diagnostics}).to_string()
+    })
 }
 
 #[unsafe(no_mangle)]
