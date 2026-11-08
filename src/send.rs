@@ -6,14 +6,17 @@ use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use reqwest::multipart::Form;
 use reqwest::{Client, Method, Request, Url};
 use serde_json::{Value, json};
 
 use crate::config::Api;
+use crate::hawk;
 use crate::header;
 use crate::reply::{Class, Reply};
 use crate::runtime;
 use crate::state::{BodyForm, Exchange, Pairs, Recipe};
+use crate::upload;
 
 /// One client per resource, built on first use and kept for the run: the
 /// timeout only, no cookie store, reqwest's default redirect policy. Keyed by
@@ -78,6 +81,7 @@ fn prepare(recipe: &Recipe, api: &Api) -> Result<Prepared, String> {
     let method = Method::from_bytes(recipe.method.as_bytes())
         .map_err(|e| format!("invalid HTTP method {:?}: {e}", recipe.method))?;
     let body = match &recipe.form {
+        _ if !recipe.files.is_empty() => Some(upload::describe(recipe)),
         Some(form) => Some(
             form.iter()
                 .map(|(k, v)| format!("{k}={v}"))
@@ -124,19 +128,79 @@ fn is_sensitive(api: &Api, name: &str) -> bool {
         .any(|masked| masked.eq_ignore_ascii_case(name))
 }
 
-fn build(client: &Client, recipe: &Recipe, prepared: &Prepared) -> Result<Request, String> {
+/// The headers and body a request leaves with: Hawk signed afresh, the
+/// multipart form rebuilt, and the configured `Content-Type` dropped for it.
+struct Outgoing {
+    headers: Pairs,
+    multipart: Option<Form>,
+}
+
+fn outgoing(recipe: &Recipe, prepared: &Prepared) -> Result<Outgoing, (Class, String)> {
+    let mut headers = recipe.headers.clone();
+    if let Some(credentials) = &recipe.signer {
+        let layout = if !recipe.files.is_empty() {
+            "multipart"
+        } else if recipe.form.is_some() {
+            "form"
+        } else {
+            ""
+        };
+        if !layout.is_empty() {
+            return Err((
+                Class::Input,
+                format!("Hawk signing supports raw request bodies only, not {layout} bodies"),
+            ));
+        }
+        headers = hawk::sign(
+            headers,
+            credentials,
+            &prepared.url,
+            prepared.method.as_str(),
+            prepared.body.as_deref().unwrap_or(""),
+        )?;
+    }
+    // The multipart Content-Type carries the boundary, so it replaces whatever
+    // `default_headers` or a header step set rather than joining it.
+    let multipart = if recipe.files.is_empty() {
+        None
+    } else {
+        headers.retain(|(k, _)| !k.eq_ignore_ascii_case("content-type"));
+        Some(upload::form(recipe).map_err(|e| (Class::Input, e))?)
+    };
+    Ok(Outgoing { headers, multipart })
+}
+
+/// Consumes the form: the boundary header is recorded first, and goes onto the
+/// recorded headers only after the real ones, as reqwest adds it last.
+fn build(
+    client: &Client,
+    recipe: &Recipe,
+    prepared: &Prepared,
+    outgoing: Outgoing,
+) -> Result<(Request, Pairs), String> {
+    let Outgoing {
+        mut headers,
+        multipart,
+    } = outgoing;
     let mut builder = client.request(prepared.method.clone(), prepared.url.clone());
-    for (k, v) in &recipe.headers {
+    for (k, v) in &headers {
         builder = builder.header(k, v);
     }
-    if let Some(form) = &recipe.form {
+    if let Some(form) = multipart {
+        headers.push((
+            "Content-Type".to_string(),
+            format!("multipart/form-data; boundary={}", form.boundary()),
+        ));
+        builder = builder.multipart(form);
+    } else if let Some(form) = &recipe.form {
         builder = builder.form(form);
     } else if let Some(body) = &recipe.body {
         builder = builder.body(body.clone());
     }
-    builder
+    let request = builder
         .build()
-        .map_err(|e| format!("failed to build HTTP request: {e}"))
+        .map_err(|e| format!("failed to build HTTP request: {e}"))?;
+    Ok((request, headers))
 }
 
 /// What came back.
@@ -237,11 +301,20 @@ pub fn send(name: &str, recipe: &Recipe, api: &Api, evidence: bool) -> (Reply, O
         Ok(client) => client,
         Err(error) => return (reply.into_failure(Class::Input, error), None),
     };
-    let request = match build(&client, recipe, &prepared) {
-        Ok(request) => request,
+    let outgoing = match outgoing(recipe, &prepared) {
+        Ok(outgoing) => outgoing,
+        Err((class, error)) => return (reply.into_failure(class, error), None),
+    };
+    // The signed header is new: it joins the secrets before the request leaves.
+    for (name, value) in &outgoing.headers {
+        if is_sensitive(api, name) && !recipe.headers.contains(&(name.clone(), value.clone())) {
+            reply.secrets.extend(header::secret_values(name, value));
+        }
+    }
+    let (request, request_headers) = match build(&client, recipe, &prepared, outgoing) {
+        Ok(built) => built,
         Err(error) => return (reply.into_failure(Class::Input, error), None),
     };
-    let request_headers = recipe.headers.clone();
     let started = Instant::now();
     let answer = match exchange_with(&client, request, &prepared) {
         Ok(answer) => answer,
@@ -253,7 +326,9 @@ pub fn send(name: &str, recipe: &Recipe, api: &Api, evidence: bool) -> (Reply, O
         url: prepared.url.to_string(),
         request_headers,
         request_body: prepared.body,
-        request_form: if recipe.form.is_some() {
+        request_form: if !recipe.files.is_empty() {
+            BodyForm::Multipart
+        } else if recipe.form.is_some() {
             BodyForm::Form
         } else {
             BodyForm::Raw
@@ -295,6 +370,8 @@ mod tests {
             ],
             body: Some(r#"{"token":"t"}"#.into()),
             form: None,
+            files: Vec::new(),
+            signer: None,
         }
     }
 

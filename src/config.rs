@@ -4,7 +4,6 @@
 
 use std::collections::BTreeMap;
 
-use num_bigint::BigUint;
 use reqwest::Url;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -170,45 +169,9 @@ pub fn secrets(group: &str, config: &Value) -> Vec<String> {
     found
 }
 
-/// What `resources.srp.<name>` takes. Checked now, used by the SRP steps.
-#[derive(Debug, Deserialize)]
-struct RawSrp {
-    variant: String,
-    #[serde(default)]
-    prime: Option<String>,
-    #[serde(default)]
-    generator: Option<String>,
-    #[serde(default)]
-    hash: Option<String>,
-}
-
 /// The variant, once the parameters it names are known to be acceptable.
 pub fn check_srp(config: &Value) -> Result<String, String> {
-    let raw = RawSrp::deserialize(config).map_err(|e| e.to_string())?;
-    match raw.variant.as_str() {
-        "hex-string" | "rfc5054" => {}
-        other => {
-            return Err(format!(
-                "unknown SRP variant {other:?}: expected hex-string or rfc5054"
-            ));
-        }
-    }
-    match raw.hash.as_deref().unwrap_or("sha-256") {
-        "sha-1" | "sha-256" | "sha-512" => {}
-        other => {
-            return Err(format!(
-                "unknown hash algorithm {other:?}: expected sha-1, sha-256, or sha-512"
-            ));
-        }
-    }
-    if let Some(prime) = &raw.prime {
-        BigUint::parse_bytes(prime.as_bytes(), 16).ok_or("prime is not a hexadecimal number")?;
-    }
-    if let Some(generator) = &raw.generator {
-        BigUint::parse_bytes(generator.as_bytes(), 10)
-            .ok_or_else(|| format!("generator is not a decimal number: {generator:?}"))?;
-    }
-    Ok(raw.variant)
+    crate::srp::SrpParams::from_config(config).map(|params| params.variant.name().to_string())
 }
 
 /// What `bddkit resource fields` and `resource add` know about the keys.

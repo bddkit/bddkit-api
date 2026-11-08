@@ -4,14 +4,18 @@
 
 mod assert;
 pub mod config;
+mod hawk;
 pub mod header;
+mod login;
 mod markup;
 mod read;
 mod reply;
 mod runtime;
 mod send;
+mod srp;
 pub mod state;
 mod steps;
+mod upload;
 
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::{CStr, CString, c_char};
@@ -22,7 +26,7 @@ use std::time::Duration;
 
 use config::Api;
 use serde_json::Value;
-use state::State;
+use state::{Instance, State};
 use steps::Step;
 
 /// The plugin ABI this library is built for.
@@ -204,11 +208,12 @@ fn init(request: &str) -> String {
         Err(e) => return reply::err(e.to_string()),
     };
     let group = value["group"].as_str().unwrap_or_default();
-    let mut apis: BTreeMap<String, Option<Arc<Api>>> = BTreeMap::new();
+    let mut apis: BTreeMap<String, Instance> = BTreeMap::new();
     for (name, instance) in value["instances"].as_object().into_iter().flatten() {
         let api = match group {
-            "api" => Api::parse(&instance["config"]).map(|api| Some(Arc::new(api))),
-            "srp" => config::check_srp(&instance["config"]).map(|_| None),
+            "api" => Api::parse(&instance["config"]).map(|api| Instance::Api(Arc::new(api))),
+            "srp" => srp::SrpParams::from_config(&instance["config"])
+                .map(|params| Instance::Srp(Arc::new(params))),
             other => Err(format!("this plugin serves no group \"{other}\"")),
         };
         match api {
@@ -294,6 +299,29 @@ pub extern "C" fn bddkit_failure_context(handle: u64) -> *mut c_char {
         let diagnostics =
             state_of(handle).map_or_else(Vec::new, |state| locked(&state).failure_context());
         serde_json::json!({"diagnostics": diagnostics}).to_string()
+    })
+}
+
+/// Before the first request, for every plugin step the suite holds, with
+/// nothing interpolated. Only a literal attachment path can be refused here.
+fn validate_step(step_index: u32, request: &str) -> String {
+    let Some(step) = Step::from_index(step_index) else {
+        return reply::err("unknown step");
+    };
+    let value: Value = match serde_json::from_str(request) {
+        Ok(v) => v,
+        Err(e) => return reply::err(e.to_string()),
+    };
+    match steps::validate(step, &value) {
+        Ok(()) => reply::ok(),
+        Err(error) => reply::err(error),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bddkit_validate_step(step_index: u32, request: *const c_char) -> *mut c_char {
+    guard(PANIC_ENVELOPE, move || {
+        validate_step(step_index, &input(request))
     })
 }
 

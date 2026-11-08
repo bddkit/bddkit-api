@@ -21,7 +21,7 @@ resources:
 
 ## Status
 
-Under development. This build declares the resource groups, their configuration checks and the per-file handle, builds and sends requests, and asserts on the response — the 23 response assertions, replayed while a polled assertion waits — and reads the response: the `extract` steps and `Print response …`. The rest of the steps are ported one issue at a time.
+Under development. This build declares the resource groups, their configuration checks and the per-file handle, builds and sends requests, and asserts on the response — the 23 response assertions, replayed while a polled assertion waits — reads the response (the `extract` steps and `Print response …`), signs the next request with Hawk, attaches files as multipart parts and runs the four SRP steps.
 
 ## Tests
 
