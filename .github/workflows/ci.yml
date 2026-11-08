@@ -18,6 +18,14 @@ jobs:
   test:
     name: test & clippy
     runs-on: ubuntu-latest
+    services:
+      # The mocks of examples/ are loaded by the Examples step: a service
+      # container cannot mount a file of the checkout.
+      smocker:
+        image: ghcr.io/smocker-dev/smocker:v1.1.2-preview
+        ports:
+          - 8080:8080
+          - 8081:8081
     steps:
       - uses: actions/checkout@v6
       # Pinned on purpose: a floating stable's new clippy lint must never
@@ -60,3 +68,44 @@ jobs:
         run: |
           export BDDKIT_BIN="$HOME/bddkit-host/bin/bddkit"
           cargo test --locked
+
+      # The examples are the demonstration surface: without this they rot.
+      - name: Examples
+        run: |
+          export BDDKIT_BIN="$HOME/bddkit-host/bin/bddkit"
+          cargo build --locked
+          for _ in $(seq 30); do curl -fs http://127.0.0.1:8081/version && break; sleep 1; done
+          curl -fsS -X POST -H 'Content-Type: application/x-yaml' \
+            --data-binary @examples/mocks/api-server.yaml http://127.0.0.1:8081/mocks
+          lock="$RUNNER_TEMP/lock"
+          mkdir -p "$lock"
+          printf 'plugin:\n  - name: api\n    path: %s/target/debug/libbddkit_api.so\n' "$PWD" > "$lock/plugins.yaml"
+          "$BDDKIT_BIN" run --config examples/api.yaml --bddkit-dir "$lock"
+
+  # The unit tests on the five release targets; the subprocess tests need the
+  # host and run on Linux above.
+  units:
+    name: unit tests (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+          - target: aarch64-apple-darwin
+            os: macos-15
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: "1.97.1"
+          target: ${{ matrix.target }}
+          rustflags: ""
+      - run: cargo test --locked --lib --target ${{ matrix.target }}
