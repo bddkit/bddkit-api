@@ -6,7 +6,7 @@ Agent orientation for this plugin repository.
 
 ## Where the contract lives
 
-The authoring contract is `docs/plugin-authoring.md` in the `bddkit/bddkit` repository (https://github.com/bddkit/bddkit/blob/main/docs/plugin-authoring.md); the host's side of it is `src/plugin/CLAUDE.md` there. If your memory has no entry saying where a local checkout of the host is, do not guess a path: ask the operator for a folder or a URL and save the answer as a `reference` memory. A change to the ABI is made in the host first and then followed here; a gap found here is fixed in the ABI, not worked around in the plugin.
+The authoring contract is `docs/plugin-authoring.md` in the `bddkit/bddkit` repository (https://github.com/bddkit/bddkit/blob/main/docs/plugin-authoring.md; until the split release, ABI 4 is described on the `split` branch: https://github.com/bddkit/bddkit/blob/split/docs/plugin-authoring.md); the host's side of it is `src/plugin/CLAUDE.md` there. If your memory has no entry saying where a local checkout of the host is, do not guess a path: ask the operator for a folder or a URL and save the answer as a `reference` memory. A change to the ABI is made in the host first and then followed here; a gap found here is fixed in the ABI, not worked around in the plugin.
 
 ## Rules only the plugin can keep (host cannot check them)
 
