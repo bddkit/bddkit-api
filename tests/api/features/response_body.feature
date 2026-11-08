@@ -29,12 +29,16 @@ Feature: assertions on a raw (non-JSON) response body
     Then the response code is 200
     And the response body has element "//user[@id='2']/email" with text "c@d.net"
     And the response body does not have element "//user[@id='99']"
+    And extract "//user[1]/@id" from response body as "firstUserId"
+    And variable "firstUserId" should be equal to "1"
 
   Scenario: element checks on an HTML body, via CSS selectors
     When I request "/html"
     Then the response code is 200
     And the response body has element "h1#title" with text "Hello"
     And the response body does not have element ".missing"
+    And extract "p.msg" from response body as "message"
+    And variable "message" should be equal to "World"
 
   Scenario: CSS selectors tolerate real-world HTML, not just strict XHTML
     When I request "/html-loose"

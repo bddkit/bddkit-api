@@ -1,6 +1,8 @@
 //! Every reply the plugin sends is built here, so the shape the host parses
 //! has one author.
 
+use std::collections::BTreeMap;
+
 use serde_json::{Value, json};
 
 /// The envelope shared by validate / probe / init / drop / select / reset.
@@ -64,6 +66,18 @@ struct Failure {
     error: String,
 }
 
+/// What a reply writes besides its verdict.
+#[derive(Default)]
+struct Written {
+    /// Variables a passed reply writes, to the scenario's frame.
+    vars: BTreeMap<String, String>,
+    /// Variables a passed reply writes through `global_vars`, which the host
+    /// warns about when a file-level variable of the name shadows them.
+    global_vars: BTreeMap<String, String>,
+    /// Lines the host prints to stderr, whatever the status.
+    output: Vec<Value>,
+}
+
 /// A dispatch reply under construction. `secrets` and `scan` go out on every
 /// status, a failure's included: that is where a value is most likely quoted.
 #[derive(Default)]
@@ -74,11 +88,33 @@ pub struct Reply {
     pub secrets: Vec<String>,
     pub scan: Vec<Value>,
     pub diagnostics: Vec<Value>,
+    /// Boxed: `Reply` is the `Err` of most steps, and a large one is a lint.
+    written: Option<Box<Written>>,
 }
 
 impl Reply {
     pub fn passed() -> Self {
         Self::default()
+    }
+
+    fn written(&mut self) -> &mut Written {
+        self.written.get_or_insert_with(Box::default)
+    }
+
+    /// Writes a variable once the reply passes; `global` for the whole file.
+    pub fn set_var(&mut self, name: &str, value: String, global: bool) {
+        let written = self.written();
+        let vars = if global {
+            &mut written.global_vars
+        } else {
+            &mut written.vars
+        };
+        vars.insert(name.to_string(), value);
+    }
+
+    /// An item the host prints to stderr, on any status.
+    pub fn print(&mut self, item: Value) {
+        self.written().output.push(item);
     }
 
     pub fn failed(class: Class, error: impl Into<String>) -> Self {
@@ -136,6 +172,13 @@ impl Reply {
         reply["secrets"] = json!(self.secrets);
         reply["scan"] = json!(self.scan);
         reply["diagnostics"] = json!(self.diagnostics);
+        if let Some(written) = &self.written {
+            reply["output"] = json!(written.output);
+            if self.failure.is_none() {
+                reply["vars"] = json!(written.vars);
+                reply["global_vars"] = json!(written.global_vars);
+            }
+        }
         reply.to_string()
     }
 }
@@ -152,6 +195,21 @@ mod tests {
         assert_eq!(v["status"], "fatal");
         assert_eq!(v["class"], "transport");
         assert_eq!(v["secrets"], json!(["s3cr3t"]));
+    }
+
+    #[test]
+    fn variables_are_sent_with_a_pass_and_dropped_from_a_failure() {
+        let mut reply = Reply::passed();
+        reply.set_var("a", "1".into(), false);
+        reply.set_var("b", "2".into(), true);
+        reply.print(json!({"text": "t", "syntax": null}));
+        let v: Value = serde_json::from_str(&reply.json()).expect("JSON");
+        assert_eq!(v["vars"], json!({"a": "1"}));
+        assert_eq!(v["global_vars"], json!({"b": "2"}));
+        let v: Value =
+            serde_json::from_str(&reply.into_failure(Class::Input, "no").json()).expect("JSON");
+        assert!(v.get("vars").is_none() && v.get("global_vars").is_none());
+        assert_eq!(v["output"], json!([{"text": "t", "syntax": null}]));
     }
 
     #[test]
