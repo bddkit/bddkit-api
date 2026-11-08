@@ -86,6 +86,8 @@ async fn a_printed_json_body_is_masked_and_reveal_shows_it() {
     assert!(stderr.contains("tok-json-value-1"), "{stderr}");
 }
 
+// core: print_body_as_path_fails_for_plain_content_type and
+// print_body_as_path_succeeds_on_real_world_html, one stub for both
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn printing_a_path_of_a_plain_body_fails_and_a_loose_html_one_prints() {
     let bin = require_bddkit!();
