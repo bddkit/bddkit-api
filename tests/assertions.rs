@@ -109,26 +109,18 @@ fn two_apis(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_moved_feature_files_pass() {
+async fn all_api_feature_files_pass_against_the_stub() {
     let bin = require_bddkit!();
     let base = common::stub::spawn().await;
-    // Not `tests/api/acceptance.yaml`: its macros use steps that are not here yet.
-    let features = common::root().join("tests/api/features");
-    let config = common::api_project("moved-features", &base, "", "", "");
-    std::fs::write(
-        &config,
-        format!(
-            "paths: [{}]\nresources:\n  api:\n    stub:\n      base_url: {base}\n  srp:\n    stub:\n      variant: hex-string\n      generator: \"2\"\n      prime: \"{}\"\n",
-            features.display().to_string().replace('\\', "/"),
-            common::stub::SRP_PRIME_HEX,
-        ),
-    )
-    .expect("config");
-    let out = common::bddkit(&bin, &["run", "--config", config.to_str().expect("UTF-8")]);
+    let out = common::command(&bin, &["run", "--config", "tests/api/acceptance.yaml"])
+        .current_dir(common::root())
+        .env("BDDKIT_STUB_URL", &base)
+        .output()
+        .expect("bddkit");
     let text = common::combined(&out);
     assert!(out.status.success(), "{text}");
     assert!(
-        text.contains("files: 7") && text.contains("failed: 0"),
+        text.contains("files: 8") && text.contains("failed: 0"),
         "{text}"
     );
 }

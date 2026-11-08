@@ -58,8 +58,16 @@ Feature: variables over HTTP
       """
     And extract "user.roles[1]" from variable "doc" as JSON as "role"
     And variable "role" should be equal to "b"
+    And I pull the user id out of variable "doc"
+    And variable "uid" should be equal to "7"
+    And variable "digits" should be equal to "7"
 
   Scenario: a variable in a typed position
     Given set variable "expected" to "200"
     When I request "/ping"
     Then the response code is <<expected>>
+
+  Scenario: a typed macro parameter, given a literal or a variable
+    Then the "/ping" page answers 200
+    Given set variable "ok" to "200"
+    Then the "/ping" page answers <<ok>>

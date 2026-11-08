@@ -1,5 +1,3 @@
-# The two `extract … from response body` lines and their variable checks of the
-# host's original return with the `extract` steps; nothing else differs.
 @api
 Feature: assertions on a raw (non-JSON) response body
 
