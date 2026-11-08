@@ -113,6 +113,7 @@ fn a_bad_config_is_refused_with_the_instance_named() {
     );
 }
 
+// core: a_config_without_any_api_resource_fails_at_first_http_step
 #[test]
 fn a_config_without_any_api_resource_fails_at_the_first_http_step() {
     let bin = require_bddkit!();
