@@ -127,7 +127,7 @@ async fn the_moved_feature_files_pass() {
     let text = common::combined(&out);
     assert!(out.status.success(), "{text}");
     assert!(
-        text.contains("files: 3") && text.contains("failed: 0"),
+        text.contains("files: 5") && text.contains("failed: 0"),
         "{text}"
     );
 }
