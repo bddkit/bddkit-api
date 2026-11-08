@@ -24,6 +24,7 @@ pub async fn spawn() -> String {
     let app = Router::new()
         .route("/ping", get(ping))
         .route("/echo", post(echo))
+        .route("/wire", post(wire))
         .route("/users", get(users))
         .route("/login", post(login))
         .route("/headers", get(headers))
@@ -72,6 +73,12 @@ async fn no_content() -> StatusCode {
 
 async fn ping() -> Json<Value> {
     Json(json!({"status": "ok", "version": 3}))
+}
+
+/// What reached the wire: the raw body and the Content-Type it travelled with.
+async fn wire(h: HeaderMap, body: String) -> Json<Value> {
+    let content_type = h.get("content-type").and_then(|v| v.to_str().ok());
+    Json(json!({"body": body, "content_type": content_type}))
 }
 
 async fn echo(body: String) -> impl IntoResponse {
