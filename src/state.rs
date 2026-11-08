@@ -1,26 +1,88 @@
 //! What one handle holds for a feature file: which instance of its group is
-//! current, and the headers the next request starts with. One handle serves
-//! every instance of its group (`handle_scope: group`), so the last response
-//! survives `I use "<name>" api`.
+//! current, the request being built, and the last request sent with what came
+//! back. One handle serves every instance of its group (`handle_scope:
+//! group`), so the last response survives `I use "<name>" api`.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
-/// Header name and value, in the order they are sent.
-pub type Headers = Vec<(String, String)>;
+use crate::config::Api;
+
+/// Name and value pairs, in the order they are sent.
+pub type Pairs = Vec<(String, String)>;
+
+/// The request the next send is made of.
+#[derive(Default)]
+pub struct Pending {
+    pub headers: Pairs,
+    pub query: Pairs,
+    pub body: Option<String>,
+    pub form: Option<Pairs>,
+}
+
+/// A request as sent: the resource it went to, by name, and everything it was
+/// made of, so it can be sent again.
+#[derive(Clone)]
+pub struct Recipe {
+    pub api: String,
+    pub method: String,
+    pub path: String,
+    pub query: Pairs,
+    pub headers: Pairs,
+    pub body: Option<String>,
+    pub form: Option<Pairs>,
+}
+
+/// How a request body is laid out, which tells the host where its sensitive
+/// fields stand.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BodyForm {
+    Raw,
+    Form,
+}
+
+impl BodyForm {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BodyForm::Raw => "raw",
+            BodyForm::Form => "form",
+        }
+    }
+}
+
+/// The last request and response, as the host's `http` diagnostic holds them.
+#[derive(Clone)]
+pub struct Exchange {
+    pub method: String,
+    pub url: String,
+    pub request_headers: Pairs,
+    pub request_body: Option<String>,
+    pub request_form: BodyForm,
+    pub status: u16,
+    pub response_headers: Pairs,
+    pub response_body: String,
+    pub duration_us: u64,
+    pub api: String,
+    pub sensitive_headers: Vec<String>,
+}
 
 pub struct State {
-    /// Each instance's `default_headers`.
-    defaults: BTreeMap<String, Headers>,
+    /// Each declared instance; an `srp` instance has no API config.
+    apis: BTreeMap<String, Option<Arc<Api>>>,
     current: Option<String>,
-    pending_headers: Headers,
+    pub pending: Pending,
+    pub recipe: Option<Recipe>,
+    pub exchange: Option<Exchange>,
 }
 
 impl State {
-    pub fn new(defaults: BTreeMap<String, Headers>) -> Self {
+    pub fn new(apis: BTreeMap<String, Option<Arc<Api>>>) -> Self {
         Self {
-            defaults,
+            apis,
             current: None,
-            pending_headers: Vec::new(),
+            pending: Pending::default(),
+            recipe: None,
+            exchange: None,
         }
     }
 
@@ -36,84 +98,210 @@ impl State {
     }
 
     /// `I use "<name>" api`: the new instance's `default_headers` replace the
-    /// pending ones. Everything else the next request holds is cleared, and the
-    /// last exchange is kept.
+    /// pending ones. Everything else the next request holds is cleared, and
+    /// the last request and exchange are kept.
     pub fn switch_to(&mut self, instance: &str) -> Result<(), String> {
-        let headers = self
-            .defaults
+        let api = self
+            .apis
             .get(instance)
-            .ok_or_else(|| format!("no instance \"{instance}\" is declared"))?
-            .clone();
+            .ok_or_else(|| format!("no instance \"{instance}\" is declared"))?;
+        self.pending = Pending {
+            headers: api
+                .iter()
+                .flat_map(|api| api.default_headers.clone())
+                .collect(),
+            ..Pending::default()
+        };
         self.current = Some(instance.to_string());
-        self.pending_headers = headers;
         Ok(())
     }
 
     /// The scenario boundary: the next dispatch starts again from its default.
     pub fn reset(&mut self) {
         self.current = None;
-        self.pending_headers.clear();
+        self.pending = Pending::default();
+        self.recipe = None;
+        self.exchange = None;
     }
 
     pub fn current(&self) -> Option<&str> {
         self.current.as_deref()
     }
 
-    pub fn pending_headers(&self) -> &[(String, String)] {
-        &self.pending_headers
+    /// The selected instance's name and checked config.
+    pub fn selected(&self) -> Result<(&str, &Arc<Api>), String> {
+        let name = self.current().ok_or("no API instance is selected")?;
+        let api = self
+            .apis
+            .get(name)
+            .and_then(Option::as_ref)
+            .ok_or_else(|| format!("\"{name}\" is not an API instance"))?;
+        Ok((name, api))
+    }
+
+    /// Whether the selected instance masks this header's value.
+    pub fn is_sensitive(&self, header: &str) -> bool {
+        self.selected().is_ok_and(|(_, api)| {
+            api.sensitive_headers
+                .iter()
+                .any(|masked| masked.eq_ignore_ascii_case(header))
+        })
+    }
+
+    /// Replace: removes every value with this name, then sets one.
+    pub fn set_header(&mut self, name: &str, value: &str) {
+        self.pending
+            .headers
+            .retain(|(k, _)| !k.eq_ignore_ascii_case(name));
+        self.add_header(name, value);
+    }
+
+    pub fn add_header(&mut self, name: &str, value: &str) {
+        self.pending
+            .headers
+            .push((name.to_string(), value.to_string()));
+    }
+
+    pub fn set_query(&mut self, name: &str, value: &str) {
+        self.pending.query.retain(|(k, _)| k != name);
+        self.pending
+            .query
+            .push((name.to_string(), value.to_string()));
+    }
+
+    pub fn set_body(&mut self, body: Option<String>) {
+        self.pending.body = body;
+        self.pending.form = None;
+    }
+
+    pub fn set_form(&mut self, pairs: Pairs) {
+        self.pending.form = Some(pairs);
+        self.pending.body = None;
+    }
+
+    /// A send forgets the last request and its exchange before it builds
+    /// anything, so a send that fails for any reason leaves nothing earlier
+    /// to dump. Returns what is to be sent and the resource it goes to.
+    pub fn begin_send(&mut self, method: &str, path: &str) -> Result<(Recipe, Arc<Api>), String> {
+        self.recipe = None;
+        self.exchange = None;
+        let (name, api) = self.selected()?;
+        let recipe = Recipe {
+            api: name.to_string(),
+            method: method.to_string(),
+            path: path.to_string(),
+            query: self.pending.query.clone(),
+            headers: self.pending.headers.clone(),
+            body: self.pending.body.clone(),
+            form: self.pending.form.clone(),
+        };
+        Ok((recipe, Arc::clone(api)))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn api(header: (&str, &str)) -> Arc<Api> {
+        Arc::new(
+            Api::parse(&json!({"base_url": "http://x/", "default_headers": {header.0: header.1}}))
+                .expect("valid"),
+        )
+    }
 
     fn state() -> State {
         State::new(BTreeMap::from([
-            (
-                "main".to_string(),
-                vec![("x-a".to_string(), "1".to_string())],
-            ),
-            (
-                "other".to_string(),
-                vec![("x-b".to_string(), "2".to_string())],
-            ),
+            ("main".to_string(), Some(api(("x-a", "1")))),
+            ("other".to_string(), Some(api(("x-b", "2")))),
         ]))
     }
 
     #[test]
-    fn the_first_dispatch_sets_the_starting_point_and_its_headers() {
+    fn new_state_seeds_headers_from_the_resource_defaults() {
         let mut s = state();
         s.begin("main").expect("ok");
         assert_eq!(s.current(), Some("main"));
-        assert_eq!(s.pending_headers(), [("x-a".to_string(), "1".to_string())]);
+        assert_eq!(s.pending.headers, [("x-a".to_string(), "1".to_string())]);
     }
 
     #[test]
-    fn a_later_dispatch_does_not_undo_a_switch() {
+    fn use_api_replaces_headers_with_the_new_resource_defaults() {
         let mut s = state();
         s.begin("main").expect("ok");
         s.switch_to("other").expect("ok");
         s.begin("other").expect("ok");
         assert_eq!(s.current(), Some("other"));
-        assert_eq!(s.pending_headers(), [("x-b".to_string(), "2".to_string())]);
+        assert_eq!(s.pending.headers, [("x-b".to_string(), "2".to_string())]);
     }
 
     #[test]
-    fn a_reset_forgets_the_switch() {
+    fn reset_returns_to_the_default_resource() {
         let mut s = state();
         s.switch_to("other").expect("ok");
+        s.set_query("a", "1");
+        s.begin_send("GET", "/").expect("ok");
         s.reset();
         assert_eq!(s.current(), None);
+        assert!(s.pending.query.is_empty() && s.recipe.is_none());
         s.begin("main").expect("ok");
         assert_eq!(s.current(), Some("main"));
     }
 
     #[test]
-    fn an_undeclared_instance_is_refused_and_changes_nothing() {
+    fn use_api_with_an_undeclared_name_is_an_error() {
         let mut s = state();
         s.begin("main").expect("ok");
         assert!(s.switch_to("nope").is_err());
         assert_eq!(s.current(), Some("main"));
+    }
+
+    #[test]
+    fn use_api_clears_the_pending_body_and_query_and_keeps_the_last_request() {
+        let mut s = state();
+        s.begin("main").expect("ok");
+        s.set_query("a", "1");
+        s.set_body(Some("{}".into()));
+        let (recipe, _) = s.begin_send("GET", "/p").expect("ok");
+        s.recipe = Some(recipe);
+        s.switch_to("other").expect("ok");
+        assert!(s.pending.query.is_empty() && s.pending.body.is_none());
+        assert_eq!(s.recipe.as_ref().map(|r| r.api.as_str()), Some("main"));
+    }
+
+    #[test]
+    fn a_send_forgets_the_last_request_before_it_builds_anything() {
+        let mut s = state();
+        s.begin("main").expect("ok");
+        let (recipe, _) = s.begin_send("GET", "/p").expect("ok");
+        s.recipe = Some(recipe);
+        s.begin_send("POST", "/q").expect("ok");
+        assert!(s.recipe.is_none() && s.exchange.is_none());
+    }
+
+    #[test]
+    fn set_header_replaces_existing_case_insensitively_and_add_header_appends() {
+        let mut s = state();
+        s.begin("main").expect("ok");
+        s.set_header("X-A", "9");
+        s.add_header("x-a", "10");
+        assert_eq!(
+            s.pending.headers,
+            [
+                ("X-A".to_string(), "9".to_string()),
+                ("x-a".to_string(), "10".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn body_and_form_are_mutually_exclusive() {
+        let mut s = state();
+        s.set_body(Some("{}".into()));
+        s.set_form(vec![("a".into(), "1".into())]);
+        assert!(s.pending.body.is_none() && s.pending.form.is_some());
+        s.set_body(Some("{}".into()));
+        assert!(s.pending.form.is_none());
     }
 }

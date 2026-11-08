@@ -136,3 +136,70 @@ pub const PING: &str = "Feature: only\n  Scenario: one\n    When I request \"/pi
 
 /// A TCP port nothing listens on.
 pub const CLOSED: &str = "http://127.0.0.1:1/";
+
+/// A one-file project whose only API is `stub`, at `base`. `api_extra` is
+/// appended to the resource (indented to sit inside it) and `top_extra` to the
+/// config. Returns the config path.
+pub fn api_project(
+    name: &str,
+    base: &str,
+    feature: &str,
+    api_extra: &str,
+    top_extra: &str,
+) -> PathBuf {
+    let resources = format!("  api:\n    stub:\n      base_url: {base}\n{api_extra}");
+    project(name, feature, &resources, top_extra)
+}
+
+/// `bddkit run --config <config> <args>`: exit code, stdout, stderr.
+pub fn run(bin: &Path, config: &Path, args: &[&str]) -> (i32, String, String) {
+    let config = config.to_str().expect("UTF-8 path");
+    let mut all = vec!["run", "--config", config];
+    all.extend_from_slice(args);
+    let out = bddkit(bin, &all);
+    (
+        out.status.code().expect("exit code"),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// The run with `--junit`: exit code, stdout and the report's text.
+pub fn run_with_junit(bin: &Path, config: &Path) -> (i32, String, String) {
+    let junit = config.with_file_name("junit.xml");
+    let (code, stdout, _) = run(
+        bin,
+        config,
+        &["--junit", junit.to_str().expect("UTF-8 path")],
+    );
+    (
+        code,
+        stdout,
+        std::fs::read_to_string(&junit).expect("junit report"),
+    )
+}
+
+/// The run with `--events … --evidence`: the evidence events it wrote.
+pub fn evidence(bin: &Path, config: &Path) -> Vec<serde_json::Value> {
+    let events = config.with_file_name("events.ndjson");
+    run(
+        bin,
+        config,
+        &[
+            "--events",
+            events.to_str().expect("UTF-8 path"),
+            "--evidence",
+        ],
+    );
+    std::fs::read_to_string(&events)
+        .expect("event stream")
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("JSON line"))
+        .filter(|event| event["type"] == "evidence")
+        .collect()
+}
+
+/// A feature of one scenario made of `steps`.
+pub fn scenario(steps: &str) -> String {
+    format!("Feature: f\n  Scenario: s\n{steps}")
+}

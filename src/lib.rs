@@ -6,6 +6,7 @@ pub mod config;
 pub mod header;
 mod reply;
 mod runtime;
+mod send;
 pub mod state;
 mod steps;
 
@@ -18,7 +19,7 @@ use std::time::Duration;
 
 use config::Api;
 use serde_json::Value;
-use state::{Headers, State};
+use state::State;
 use steps::Step;
 
 /// The plugin ABI this library is built for.
@@ -200,24 +201,22 @@ fn init(request: &str) -> String {
         Err(e) => return reply::err(e.to_string()),
     };
     let group = value["group"].as_str().unwrap_or_default();
-    let mut defaults: BTreeMap<String, Headers> = BTreeMap::new();
+    let mut apis: BTreeMap<String, Option<Arc<Api>>> = BTreeMap::new();
     for (name, instance) in value["instances"].as_object().into_iter().flatten() {
-        let headers = match group {
-            "api" => {
-                Api::parse(&instance["config"]).map(|api| api.default_headers.into_iter().collect())
-            }
-            "srp" => config::check_srp(&instance["config"]).map(|_| Vec::new()),
+        let api = match group {
+            "api" => Api::parse(&instance["config"]).map(|api| Some(Arc::new(api))),
+            "srp" => config::check_srp(&instance["config"]).map(|_| None),
             other => Err(format!("this plugin serves no group \"{other}\"")),
         };
-        match headers {
-            Ok(headers) => {
-                defaults.insert(name.clone(), headers);
+        match api {
+            Ok(api) => {
+                apis.insert(name.clone(), api);
             }
             Err(error) => return reply::err_in(name, error),
         }
     }
     let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
-    handles().insert(handle, Arc::new(Mutex::new(State::new(defaults))));
+    handles().insert(handle, Arc::new(Mutex::new(State::new(apis))));
     reply::handle(handle)
 }
 
@@ -227,9 +226,9 @@ pub extern "C" fn bddkit_init_instance(request: *const c_char) -> *mut c_char {
 }
 
 fn dispatch(handle: u64, step_index: u32, request: &str) -> String {
-    if Step::from_index(step_index).is_none() {
+    let Some(step) = Step::from_index(step_index) else {
         return reply::fatal("unknown step");
-    }
+    };
     let Some(state) = state_of(handle) else {
         return reply::fatal("unknown handle");
     };
@@ -240,9 +239,8 @@ fn dispatch(handle: u64, step_index: u32, request: &str) -> String {
     if let Err(error) = locked(&state).begin(request["instance"].as_str().unwrap_or_default()) {
         return reply::fatal(&error);
     }
-    // ponytail: the steps are declared so a suite can name them; what they do
-    // arrives with the issues that port them.
-    reply::fatal("this step is declared but not implemented in this build yet")
+    let call = steps::Call::parse(&request);
+    steps::run(step, &mut locked(&state), &call).json()
 }
 
 #[unsafe(no_mangle)]
