@@ -7,9 +7,18 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::config::Api;
+use crate::srp::SrpParams;
+use crate::upload::FilePart;
 
 /// Name and value pairs, in the order they are sent.
 pub type Pairs = Vec<(String, String)>;
+
+/// Hawk credentials for the request they are armed for.
+#[derive(Clone)]
+pub struct Credentials {
+    pub id: String,
+    pub key: String,
+}
 
 /// The request the next send is made of.
 #[derive(Default)]
@@ -18,6 +27,9 @@ pub struct Pending {
     pub query: Pairs,
     pub body: Option<String>,
     pub form: Option<Pairs>,
+    pub files: Vec<FilePart>,
+    /// Signs the next distinct send only; a replay keeps them in its recipe.
+    pub signer: Option<Credentials>,
 }
 
 /// A request as sent: the resource it went to, by name, and everything it was
@@ -31,6 +43,8 @@ pub struct Recipe {
     pub headers: Pairs,
     pub body: Option<String>,
     pub form: Option<Pairs>,
+    pub files: Vec<FilePart>,
+    pub signer: Option<Credentials>,
 }
 
 /// How a request body is laid out, which tells the host where its sensitive
@@ -39,6 +53,7 @@ pub struct Recipe {
 pub enum BodyForm {
     Raw,
     Form,
+    Multipart,
 }
 
 impl BodyForm {
@@ -46,6 +61,7 @@ impl BodyForm {
         match self {
             BodyForm::Raw => "raw",
             BodyForm::Form => "form",
+            BodyForm::Multipart => "multipart",
         }
     }
 }
@@ -66,9 +82,23 @@ pub struct Exchange {
     pub sensitive_headers: Vec<String>,
 }
 
+/// One declared instance, checked: an `api` or an `srp` of the handle's group.
+pub enum Instance {
+    Api(Arc<Api>),
+    Srp(Arc<SrpParams>),
+}
+
+impl Instance {
+    fn api(&self) -> Option<&Arc<Api>> {
+        match self {
+            Instance::Api(api) => Some(api),
+            Instance::Srp(_) => None,
+        }
+    }
+}
+
 pub struct State {
-    /// Each declared instance; an `srp` instance has no API config.
-    apis: BTreeMap<String, Option<Arc<Api>>>,
+    apis: BTreeMap<String, Instance>,
     current: Option<String>,
     pub pending: Pending,
     pub recipe: Option<Recipe>,
@@ -76,7 +106,7 @@ pub struct State {
 }
 
 impl State {
-    pub fn new(apis: BTreeMap<String, Option<Arc<Api>>>) -> Self {
+    pub fn new(apis: BTreeMap<String, Instance>) -> Self {
         Self {
             apis,
             current: None,
@@ -107,6 +137,7 @@ impl State {
             .ok_or_else(|| format!("no instance \"{instance}\" is declared"))?;
         self.pending = Pending {
             headers: api
+                .api()
                 .iter()
                 .flat_map(|api| api.default_headers.clone())
                 .collect(),
@@ -134,9 +165,18 @@ impl State {
         let api = self
             .apis
             .get(name)
-            .and_then(Option::as_ref)
+            .and_then(Instance::api)
             .ok_or_else(|| format!("\"{name}\" is not an API instance"))?;
         Ok((name, api))
+    }
+
+    /// The selected `srp` instance's parameters.
+    pub fn srp(&self) -> Result<Arc<SrpParams>, String> {
+        let name = self.current().ok_or("no SRP instance is selected")?;
+        match self.apis.get(name) {
+            Some(Instance::Srp(params)) => Ok(Arc::clone(params)),
+            _ => Err(format!("\"{name}\" is not an SRP instance")),
+        }
     }
 
     /// An instance's checked config by name, selected or not: a replay goes to
@@ -144,7 +184,7 @@ impl State {
     pub fn api_named(&self, name: &str) -> Result<Arc<Api>, String> {
         self.apis
             .get(name)
-            .and_then(Option::as_ref)
+            .and_then(Instance::api)
             .map(Arc::clone)
             .ok_or_else(|| format!("\"{name}\" is not an API instance"))
     }
@@ -153,7 +193,7 @@ impl State {
     /// one. A handle without an API instance (`srp`) answers nothing, so its
     /// steps never show an exchange a second time.
     pub fn failure_context(&self) -> Vec<serde_json::Value> {
-        if !self.apis.values().any(Option::is_some) {
+        if !self.apis.values().any(|instance| instance.api().is_some()) {
             return Vec::new();
         }
         self.exchange.iter().map(crate::send::diagnostic).collect()
@@ -192,6 +232,22 @@ impl State {
     pub fn set_body(&mut self, body: Option<String>) {
         self.pending.body = body;
         self.pending.form = None;
+        self.pending.files.clear();
+    }
+
+    /// Any attachment turns the request into `multipart/form-data`, with the
+    /// form parameters as its text parts.
+    pub fn attach(&mut self, file: FilePart) {
+        self.pending.body = None;
+        self.pending.files.push(file);
+    }
+
+    /// Armed for the next send only.
+    pub fn sign_next(&mut self, id: &str, key: &str) {
+        self.pending.signer = Some(Credentials {
+            id: id.to_string(),
+            key: key.to_string(),
+        });
     }
 
     pub fn set_form(&mut self, pairs: Pairs) {
@@ -206,16 +262,19 @@ impl State {
         self.recipe = None;
         self.exchange = None;
         let (name, api) = self.selected()?;
+        let (name, api) = (name.to_string(), Arc::clone(api));
         let recipe = Recipe {
-            api: name.to_string(),
+            api: name,
             method: method.to_string(),
             path: path.to_string(),
             query: self.pending.query.clone(),
             headers: self.pending.headers.clone(),
             body: self.pending.body.clone(),
             form: self.pending.form.clone(),
+            files: self.pending.files.clone(),
+            signer: self.pending.signer.take(),
         };
-        Ok((recipe, Arc::clone(api)))
+        Ok((recipe, api))
     }
 }
 
@@ -224,17 +283,23 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn api(header: (&str, &str)) -> Arc<Api> {
-        Arc::new(
+    fn api(header: (&str, &str)) -> Instance {
+        Instance::Api(Arc::new(
             Api::parse(&json!({"base_url": "http://x/", "default_headers": {header.0: header.1}}))
                 .expect("valid"),
-        )
+        ))
+    }
+
+    fn srp_instance() -> Instance {
+        Instance::Srp(Arc::new(
+            SrpParams::from_config(&json!({"variant": "hex-string"})).expect("valid"),
+        ))
     }
 
     fn state() -> State {
         State::new(BTreeMap::from([
-            ("main".to_string(), Some(api(("x-a", "1")))),
-            ("other".to_string(), Some(api(("x-b", "2")))),
+            ("main".to_string(), api(("x-a", "1"))),
+            ("other".to_string(), api(("x-b", "2"))),
         ]))
     }
 
@@ -263,7 +328,7 @@ mod tests {
         assert_eq!(context.len(), 1);
         assert_eq!(context[0]["kind"], "http");
         assert_eq!(context[0]["resource"], "main");
-        let mut srp = State::new(BTreeMap::from([("main".to_string(), None)]));
+        let mut srp = State::new(BTreeMap::from([("main".to_string(), srp_instance())]));
         srp.exchange = Some(an_exchange());
         assert!(srp.failure_context().is_empty(), "an srp handle shows none");
     }

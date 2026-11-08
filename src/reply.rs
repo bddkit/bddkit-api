@@ -46,6 +46,9 @@ pub enum Class {
     Input,
     Transport,
     Assertion,
+    /// The clock or the system entropy failed: neither the scenario nor the
+    /// service is at fault, so no other class fits.
+    Unclassified,
 }
 
 impl Class {
@@ -54,6 +57,7 @@ impl Class {
             Class::Input => "input",
             Class::Transport => "transport",
             Class::Assertion => "assertion",
+            Class::Unclassified => "unclassified",
         }
     }
 }
@@ -240,5 +244,15 @@ mod tests {
     fn a_refusal_names_its_instance() {
         let v: Value = serde_json::from_str(&err_in("audit", "boom")).expect("JSON");
         assert_eq!(v["instance"], "audit");
+    }
+
+    #[test]
+    fn the_host_faults_are_unclassified() {
+        let v: Value = serde_json::from_str(&Reply::failed(Class::Unclassified, "no clock").json())
+            .expect("JSON");
+        assert_eq!(
+            (v["status"].as_str(), v["class"].as_str()),
+            (Some("fatal"), Some("unclassified"))
+        );
     }
 }

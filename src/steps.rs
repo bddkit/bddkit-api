@@ -6,10 +6,12 @@ use serde_json::{Value, json};
 
 use crate::assert::{self, AttemptError, AttemptResult};
 use crate::header;
+use crate::login;
 use crate::read;
 use crate::reply::{Class, Reply};
 use crate::send;
 use crate::state::{Exchange, State};
+use crate::upload;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
@@ -54,9 +56,13 @@ pub enum Step {
     PrintHeaders,
     PrintBody,
     PrintBodyAs,
+    SrpVerifier,
+    SrpVerifierWithSalt,
+    SrpStartLogin,
+    SrpCompleteLogin,
 }
 
-const ALL: [Step; 41] = [
+const ALL: [Step; 45] = [
     Step::Request,
     Step::ResponseCode,
     Step::RequestUsing,
@@ -98,6 +104,10 @@ const ALL: [Step; 41] = [
     Step::PrintHeaders,
     Step::PrintBody,
     Step::PrintBodyAs,
+    Step::SrpVerifier,
+    Step::SrpVerifierWithSalt,
+    Step::SrpStartLogin,
+    Step::SrpCompleteLogin,
 ];
 
 impl Step {
@@ -269,14 +279,43 @@ impl Step {
             ),
             Step::Attach => build_spec(
                 r#"I attach the file "{file}" to the request as "{name}""#,
-                "attaches a file to the next request as a multipart part",
+                "attaches a file, path relative to this feature file, as a multipart/form-data part",
             ),
             Step::Hawk => build_spec(
                 r#"I sign the next request with Hawk id "{id}" and key "{key:secret}""#,
-                "signs the next request with Hawk",
+                "signs the next request with these Hawk credentials, and every replay of it",
             ),
+            Step::SrpVerifierWithSalt => srp_spec(
+                r#"I generate an SRP verifier for "{username}" with password "{password:secret}" and salt "{salt}" as "{prefix}""#,
+                "computes an SRP verifier from this salt into <prefix>_salt and <prefix>_verifier",
+            ),
+            Step::SrpVerifier => srp_spec(
+                r#"I generate an SRP verifier for "{username}" with password "{password:secret}" as "{prefix}""#,
+                "computes an SRP verifier from a fresh salt into <prefix>_salt and <prefix>_verifier",
+            ),
+            Step::SrpStartLogin => srp_spec(
+                r#"I start an SRP login as "{prefix}""#,
+                "starts an SRP login, storing the client values in <prefix>_a and <prefix>_A",
+            ),
+            Step::SrpCompleteLogin => {
+                let mut spec = srp_spec(
+                    r#"I complete SRP login "{prefix}" for "{username}" with password "{password:secret}" salt "{salt}" and "{server_public}""#,
+                    "answers the server challenge into <prefix>_M1, <prefix>_M2 and <prefix>_sessionKey",
+                );
+                // It reads `<prefix>_a`, which the start wrote.
+                spec["wants_vars"] = json!(true);
+                spec
+            }
         }
     }
+}
+
+/// The SRP steps write a family of variables named by their prefix.
+fn srp_spec(expression: &str, description: &str) -> Value {
+    json!({
+        "expression": expression, "group": "srp", "kind": "action",
+        "description": description, "sets_vars": ["{prefix}_*"],
+    })
 }
 
 fn send_spec(expression: &str, description: &str) -> Value {
@@ -313,6 +352,10 @@ pub struct Call {
     pub evidence: bool,
     /// 1-based within a polled assertion; 1 for a step that is not polled.
     attempt: u64,
+    /// The directory of the file the step is written in.
+    source_dir: String,
+    /// The file's variables, for a step that asked for them.
+    vars: Value,
 }
 
 impl Call {
@@ -328,6 +371,11 @@ impl Call {
             table: serde_json::from_value(request["table"].clone()).ok(),
             evidence: request["evidence"].as_bool().unwrap_or(false),
             attempt: request["attempt"].as_u64().unwrap_or(1),
+            source_dir: request["source_dir"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            vars: request["vars"].clone(),
         }
     }
 
@@ -377,10 +425,45 @@ fn run_step(step: Step, state: &mut State, call: &Call) -> Result<Reply, Reply> 
             Ok(Reply::passed())
         }
         Step::SetForm => set_form(state, call),
-        Step::Attach | Step::Hawk => Err(Reply::failed(
-            Class::Input,
-            "this step is declared but not implemented in this build yet",
+        Step::Attach => {
+            let file = upload::read(call.arg(0)?, call.arg(1)?, &call.source_dir)
+                .map_err(|error| Reply::failed(Class::Input, error))?;
+            state.attach(file);
+            Ok(Reply::passed())
+        }
+        Step::Hawk => {
+            state.sign_next(call.arg(0)?, call.arg(1)?);
+            Ok(Reply::passed())
+        }
+        Step::SrpVerifier => Ok(login::generate_verifier(
+            &*srp_params(state)?,
+            call.arg(0)?,
+            call.arg(1)?,
+            None,
+            call.arg(2)?,
         )),
+        Step::SrpVerifierWithSalt => Ok(login::generate_verifier(
+            &*srp_params(state)?,
+            call.arg(0)?,
+            call.arg(1)?,
+            Some(call.arg(2)?),
+            call.arg(3)?,
+        )),
+        Step::SrpStartLogin => Ok(login::start_login(&*srp_params(state)?, call.arg(0)?)),
+        Step::SrpCompleteLogin => {
+            let prefix = call.arg(0)?;
+            Ok(login::complete_login(
+                &*srp_params(state)?,
+                &login::Completion {
+                    prefix,
+                    identity: call.arg(1)?,
+                    password: call.arg(2)?,
+                    salt: call.arg(3)?,
+                    server_public: call.arg(4)?,
+                    a: call.vars[format!("{prefix}_a")]["value"].as_str(),
+                },
+            ))
+        }
         Step::ResponseCode
         | Step::ResponseBodyContainsJson
         | Step::ResponseBodyEqualsJson
@@ -416,6 +499,23 @@ fn run_step(step: Step, state: &mut State, call: &Call) -> Result<Reply, Reply> 
             print(state, |ex| read::print_body_as(ex, selector))
         }
     }
+}
+
+/// The selected `srp` instance's parameters.
+fn srp_params(state: &State) -> Result<std::sync::Arc<crate::srp::SrpParams>, Reply> {
+    state
+        .srp()
+        .map_err(|error| Reply::failed(Class::Input, error))
+}
+
+/// Before the first request: a literal attachment path must be a file.
+/// Nothing else can be refused without a value.
+pub fn validate(step: Step, request: &Value) -> Result<(), String> {
+    if step != Step::Attach {
+        return Ok(());
+    }
+    let file = request["args"][0].as_str().unwrap_or_default();
+    upload::validate(file, request["source_dir"].as_str().unwrap_or_default())
 }
 
 /// The last response, for a step that only reads it. Never replayed.
@@ -551,6 +651,10 @@ fn check(step: Step, ex: &Exchange, call: &Call) -> AttemptResult {
         | Step::SetForm
         | Step::Attach
         | Step::Hawk
+        | Step::SrpVerifier
+        | Step::SrpVerifierWithSalt
+        | Step::SrpStartLogin
+        | Step::SrpCompleteLogin
         | Step::ExtractJson
         | Step::ExtractJsonGlobal
         | Step::ExtractCookie
@@ -647,7 +751,7 @@ mod tests {
             crate::config::Api::parse(&json!({"base_url": "http://127.0.0.1:1/"})).expect("valid");
         let mut state = State::new(std::collections::BTreeMap::from([(
             "main".to_string(),
-            Some(std::sync::Arc::new(api)),
+            crate::state::Instance::Api(std::sync::Arc::new(api)),
         )]));
         state.begin("main").expect("ok");
         let (recipe, _) = state.begin_send("GET", "/p").expect("ok");
@@ -675,7 +779,7 @@ mod tests {
         let api = crate::config::Api::parse(&json!({"base_url": base})).expect("valid");
         let mut state = State::new(std::collections::BTreeMap::from([(
             "main".to_string(),
-            Some(std::sync::Arc::new(api)),
+            crate::state::Instance::Api(std::sync::Arc::new(api)),
         )]));
         state.begin("main").expect("ok");
         let (recipe, _) = state.begin_send("GET", "/p").expect("ok");
@@ -785,6 +889,9 @@ mod tests {
             } else if spec["reads"] == json!(["response"]) {
                 // An extract or a print reads the response and builds nothing.
                 assert!(writes.is_null(), "{text}");
+            } else if spec["group"] == "srp" {
+                assert!(writes.is_null(), "{text}");
+                assert_eq!(spec["sets_vars"], json!(["{prefix}_*"]), "{text}");
             } else if spec["kind"] == "action" {
                 assert_eq!(writes, &json!(["request"]), "{text}");
             }
