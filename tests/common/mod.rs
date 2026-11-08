@@ -12,6 +12,7 @@
     reason = "each test binary uses a part of this module; `allow-*-in-tests` covers only `#[test]` functions, not the helpers here"
 )]
 
+pub mod barrier;
 pub mod stub;
 
 use std::path::{Path, PathBuf};
