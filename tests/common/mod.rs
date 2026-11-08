@@ -13,6 +13,7 @@
 )]
 
 pub mod barrier;
+pub mod events;
 pub mod stub;
 
 use std::path::{Path, PathBuf};
@@ -20,10 +21,10 @@ use std::process::{Command, Output};
 use std::sync::OnceLock;
 
 pub fn bddkit_bin() -> Option<PathBuf> {
-    std::env::var("BDDKIT_BIN")
-        .ok()
-        .map(PathBuf::from)
-        .filter(|p| p.is_file())
+    let bin = PathBuf::from(std::env::var_os("BDDKIT_BIN")?);
+    // A path that is set but wrong must not look like a green suite.
+    assert!(bin.is_file(), "BDDKIT_BIN is not a file: {}", bin.display());
+    Some(bin)
 }
 
 /// Returns from the test, with a note, when there is no host to run it on.
@@ -116,6 +117,8 @@ pub fn combined(out: &Output) -> String {
 /// `resources`, indented two spaces by the caller. Returns the config path.
 pub fn project(name: &str, feature: &str, resources: &str, extra: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("bddkit-api-{name}-{}", std::process::id()));
+    // Left over from an earlier run with the same pid, a stale file would count.
+    let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("features")).expect("mkdir");
     std::fs::write(dir.join("features/only.feature"), feature).expect("feature");
     let config = dir.join("cfg.yaml");
