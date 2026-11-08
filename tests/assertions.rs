@@ -118,8 +118,9 @@ async fn the_moved_feature_files_pass() {
     std::fs::write(
         &config,
         format!(
-            "paths: [{}]\nresources:\n  api:\n    stub:\n      base_url: {base}\n",
-            features.display().to_string().replace('\\', "/")
+            "paths: [{}]\nresources:\n  api:\n    stub:\n      base_url: {base}\n  srp:\n    stub:\n      variant: hex-string\n      generator: \"2\"\n      prime: \"{}\"\n",
+            features.display().to_string().replace('\\', "/"),
+            common::stub::SRP_PRIME_HEX,
         ),
     )
     .expect("config");
@@ -127,7 +128,7 @@ async fn the_moved_feature_files_pass() {
     let text = common::combined(&out);
     assert!(out.status.success(), "{text}");
     assert!(
-        text.contains("files: 5") && text.contains("failed: 0"),
+        text.contains("files: 7") && text.contains("failed: 0"),
         "{text}"
     );
 }
