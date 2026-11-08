@@ -4,10 +4,11 @@
 
 use serde_json::{Value, json};
 
+use crate::assert::{self, AttemptError, AttemptResult};
 use crate::header;
 use crate::reply::{Class, Reply};
 use crate::send;
-use crate::state::State;
+use crate::state::{Exchange, State};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
@@ -22,9 +23,31 @@ pub enum Step {
     SetForm,
     Attach,
     Hawk,
+    ResponseBodyContainsJson,
+    ResponseBodyEqualsJson,
+    ResponseArrayLength,
+    ResponseHeader,
+    ResponseHeaderContains,
+    ResponseHeaderNotContains,
+    ResponseHeaderMatches,
+    ResponseHeaderNotMatches,
+    JsonNodeExists,
+    JsonNodeNotExists,
+    JsonNodeIsNull,
+    JsonNodeNotNull,
+    ResponseBodyNotContainsJson,
+    JsonNodeNotContainsSubstring,
+    ResponseBodyEmpty,
+    ResponseBodyContains,
+    ResponseBodyNotContains,
+    ResponseBodyMatches,
+    ResponseBodyNotMatches,
+    ResponseBodyHasElement,
+    ResponseBodyHasElementWithText,
+    ResponseBodyNotHasElement,
 }
 
-const ALL: [Step; 11] = [
+const ALL: [Step; 33] = [
     Step::Request,
     Step::ResponseCode,
     Step::RequestUsing,
@@ -36,6 +59,28 @@ const ALL: [Step; 11] = [
     Step::SetForm,
     Step::Attach,
     Step::Hawk,
+    Step::ResponseBodyContainsJson,
+    Step::ResponseBodyEqualsJson,
+    Step::ResponseArrayLength,
+    Step::ResponseHeader,
+    Step::ResponseHeaderContains,
+    Step::ResponseHeaderNotContains,
+    Step::ResponseHeaderMatches,
+    Step::ResponseHeaderNotMatches,
+    Step::JsonNodeExists,
+    Step::JsonNodeNotExists,
+    Step::JsonNodeIsNull,
+    Step::JsonNodeNotNull,
+    Step::ResponseBodyNotContainsJson,
+    Step::JsonNodeNotContainsSubstring,
+    Step::ResponseBodyEmpty,
+    Step::ResponseBodyContains,
+    Step::ResponseBodyNotContains,
+    Step::ResponseBodyMatches,
+    Step::ResponseBodyNotMatches,
+    Step::ResponseBodyHasElement,
+    Step::ResponseBodyHasElementWithText,
+    Step::ResponseBodyNotHasElement,
 ];
 
 impl Step {
@@ -43,6 +88,10 @@ impl Step {
         ALL.get(usize::try_from(index).ok()?).copied()
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one arm per step; a table would hide the text"
+    )]
     fn spec(self) -> Value {
         match self {
             Step::Request => send_spec(
@@ -53,13 +102,98 @@ impl Step {
                 r#"I request "{path}" using HTTP {method:method}"#,
                 "sends a request with this method to the path, resolved against the API's base URL",
             ),
-            Step::ResponseCode => json!({
-                "expression": "the response code is {code:uint}",
-                "group": "api", "kind": "assertion",
-                "description": "asserts the status code of the last response",
-                "reads": ["response"],
-                "sets_vars": [],
-            }),
+            Step::ResponseCode => assert_spec(
+                "the response code is {code:uint}",
+                "asserts the HTTP status code of the last response",
+            ),
+            Step::ResponseBodyContainsJson => assert_spec(
+                "the response body contains JSON:",
+                "asserts the response body contains this JSON — object subsets pass, array order is ignored",
+            ),
+            Step::ResponseBodyEqualsJson => assert_spec(
+                "the response body equals JSON:",
+                "asserts the response body equals this JSON exactly, key for key and element for element",
+            ),
+            Step::ResponseArrayLength => assert_spec(
+                "the response body is a JSON array of length {length:uint}",
+                "asserts the response body is a JSON array holding this many elements",
+            ),
+            Step::ResponseHeader => assert_spec(
+                r#"the "{name}" response header is "{value}""#,
+                "asserts a response header holds exactly this value — on any line, when the server sent the header more than once",
+            ),
+            Step::ResponseHeaderContains => assert_spec(
+                r#"the "{name}" response header contains "{text:any}""#,
+                "asserts a response header's value contains this text — on any line, when the header repeats",
+            ),
+            Step::ResponseHeaderNotContains => assert_spec(
+                r#"the "{name}" response header does not contain "{text:any}""#,
+                "asserts no line of a response header contains this text — passes when the header is absent",
+            ),
+            Step::ResponseHeaderMatches => assert_spec(
+                r#"the "{name}" response header matches "{pattern:any}""#,
+                "asserts a response header's value matches this regular expression — on any line, when the header repeats",
+            ),
+            Step::ResponseHeaderNotMatches => assert_spec(
+                r#"the "{name}" response header does not match "{pattern:any}""#,
+                "asserts no line of a response header matches this regular expression — passes when the header is absent",
+            ),
+            Step::JsonNodeExists => assert_spec(
+                r#"the JSON node "{path}" should exist"#,
+                "asserts the response body has a node at this JSON path",
+            ),
+            Step::JsonNodeNotExists => assert_spec(
+                r#"the JSON node "{path}" should not exist"#,
+                "asserts the response body has no node at this JSON path — a null value still counts as existing",
+            ),
+            Step::JsonNodeIsNull => assert_spec(
+                r#"the JSON node "{path}" should be null"#,
+                "asserts the node at this JSON path exists and is JSON null",
+            ),
+            Step::JsonNodeNotNull => assert_spec(
+                r#"the JSON node "{path}" should not be null"#,
+                "asserts the node at this JSON path exists and is not JSON null",
+            ),
+            Step::ResponseBodyNotContainsJson => assert_spec(
+                "the response body does not contain JSON:",
+                "asserts the response body does not contain this JSON — same subset/order-independent matching as `contains`, inverted",
+            ),
+            Step::JsonNodeNotContainsSubstring => assert_spec(
+                r#"the JSON node "{path}" should not contain "{substring}""#,
+                "asserts a string node does not contain this substring",
+            ),
+            Step::ResponseBodyEmpty => assert_spec(
+                "the response body should be empty",
+                "asserts the response body is empty",
+            ),
+            Step::ResponseBodyContains => assert_spec(
+                r#"the response body contains "{text}""#,
+                "asserts the raw response body contains this text — works for any content type",
+            ),
+            Step::ResponseBodyNotContains => assert_spec(
+                r#"the response body does not contain "{text}""#,
+                "asserts the raw response body does not contain this text",
+            ),
+            Step::ResponseBodyMatches => assert_spec(
+                r#"the response body matches "{pattern}""#,
+                "asserts the raw response body matches this regular expression",
+            ),
+            Step::ResponseBodyNotMatches => assert_spec(
+                r#"the response body does not match "{pattern}""#,
+                "asserts the raw response body does not match this regular expression",
+            ),
+            Step::ResponseBodyHasElement => assert_spec(
+                r#"the response body has element "{selector}""#,
+                "asserts an HTML (CSS selector) or XML (XPath) element matches in the response body",
+            ),
+            Step::ResponseBodyHasElementWithText => assert_spec(
+                r#"the response body has element "{selector}" with text "{text}""#,
+                "asserts the matched elements' text, newline-joined if more than one, equals this value exactly",
+            ),
+            Step::ResponseBodyNotHasElement => assert_spec(
+                r#"the response body does not have element "{selector}""#,
+                "asserts no element matches this selector in the response body",
+            ),
             Step::SetHeader => build_spec(
                 r#"the "{name}" request header is "{value}""#,
                 "sets a request header, replacing any earlier value of that name",
@@ -103,6 +237,13 @@ fn send_spec(expression: &str, description: &str) -> Value {
     })
 }
 
+fn assert_spec(expression: &str, description: &str) -> Value {
+    json!({
+        "expression": expression, "group": "api", "kind": "assertion",
+        "description": description, "reads": ["response"], "sets_vars": [],
+    })
+}
+
 fn build_spec(expression: &str, description: &str) -> Value {
     json!({
         "expression": expression, "group": "api", "kind": "action",
@@ -121,6 +262,8 @@ pub struct Call {
     docstring: Option<String>,
     table: Option<Vec<Vec<String>>>,
     pub evidence: bool,
+    /// 1-based within a polled assertion; 1 for a step that is not polled.
+    attempt: u64,
 }
 
 impl Call {
@@ -135,17 +278,25 @@ impl Call {
             docstring: request["docstring"].as_str().map(str::to_string),
             table: serde_json::from_value(request["table"].clone()).ok(),
             evidence: request["evidence"].as_bool().unwrap_or(false),
+            attempt: request["attempt"].as_u64().unwrap_or(1),
         }
     }
 
     fn arg(&self, index: usize) -> Result<&str, Reply> {
-        self.args.get(index).map(String::as_str).ok_or_else(|| {
-            Reply::failed(
-                Class::Input,
-                format!("the step is missing argument {}", index + 1),
-            )
-        })
+        self.need(index)
+            .map_err(|_| Reply::failed(Class::Input, missing(index)))
     }
+
+    fn need(&self, index: usize) -> Result<&str, AttemptError> {
+        self.args
+            .get(index)
+            .map(String::as_str)
+            .ok_or_else(|| AttemptError::input(missing(index)))
+    }
+}
+
+fn missing(index: usize) -> String {
+    format!("the step is missing argument {}", index + 1)
 }
 
 /// Runs a step against the handle's state. Every failure is classed where it
@@ -177,10 +328,138 @@ fn run_step(step: Step, state: &mut State, call: &Call) -> Result<Reply, Reply> 
             Ok(Reply::passed())
         }
         Step::SetForm => set_form(state, call),
-        Step::ResponseCode | Step::Attach | Step::Hawk => Err(Reply::failed(
+        Step::Attach | Step::Hawk => Err(Reply::failed(
             Class::Input,
             "this step is declared but not implemented in this build yet",
         )),
+        Step::ResponseCode
+        | Step::ResponseBodyContainsJson
+        | Step::ResponseBodyEqualsJson
+        | Step::ResponseArrayLength
+        | Step::ResponseHeader
+        | Step::ResponseHeaderContains
+        | Step::ResponseHeaderNotContains
+        | Step::ResponseHeaderMatches
+        | Step::ResponseHeaderNotMatches
+        | Step::JsonNodeExists
+        | Step::JsonNodeNotExists
+        | Step::JsonNodeIsNull
+        | Step::JsonNodeNotNull
+        | Step::ResponseBodyNotContainsJson
+        | Step::JsonNodeNotContainsSubstring
+        | Step::ResponseBodyEmpty
+        | Step::ResponseBodyContains
+        | Step::ResponseBodyNotContains
+        | Step::ResponseBodyMatches
+        | Step::ResponseBodyNotMatches
+        | Step::ResponseBodyHasElement
+        | Step::ResponseBodyHasElementWithText
+        | Step::ResponseBodyNotHasElement => Ok(response_assertion(step, state, call)),
+    }
+}
+
+/// Attempt 1 checks the exchange the request left. From attempt 2 the request
+/// is sent again first, to the API it went to, whatever instance is selected
+/// now. The reply of a send that got no answer is what ends the attempt.
+fn observe(state: &mut State, attempt: u64) -> Result<Reply, Reply> {
+    if attempt <= 1 {
+        return Ok(Reply::passed());
+    }
+    let recipe = state
+        .recipe
+        .clone()
+        .ok_or_else(|| Reply::failed(Class::Input, "request has not been sent"))?;
+    let api = state
+        .api_named(&recipe.api)
+        .map_err(|error| Reply::failed(Class::Input, error))?;
+    state.exchange = None;
+    let (sent, exchange) = send::send(&recipe.api, &recipe, &api, false);
+    if exchange.is_some() {
+        state.exchange = exchange;
+        return Ok(sent);
+    }
+    Err(match sent.failure() {
+        Some((Class::Transport, error)) => {
+            let error = error.to_string();
+            sent.into_not_yet(Class::Transport, error, &recipe.api)
+        }
+        _ => sent,
+    })
+}
+
+fn response_assertion(step: Step, state: &mut State, call: &Call) -> Reply {
+    let replayed = call.attempt > 1;
+    let base = match observe(state, call.attempt) {
+        Ok(base) => base,
+        Err(reply) => return reply,
+    };
+    let Some(exchange) = state.exchange.as_ref() else {
+        return Reply::failed(Class::Input, "no request has been sent yet");
+    };
+    let result = check(step, exchange, call);
+    let mut reply = match result {
+        Ok(()) => base,
+        Err(AttemptError::NotYet(error)) => {
+            base.into_not_yet(Class::Assertion, error, &exchange.api)
+        }
+        Err(AttemptError::Fatal(class, error)) => base.into_failure(class, error),
+    };
+    // A replay is a new exchange, shown with the reply it belongs to. The
+    // first attempt's is shown by the request step, or by the failure context.
+    if replayed && (call.evidence || reply.failure().is_some()) {
+        reply.diagnostics.push(send::diagnostic(exchange));
+    }
+    reply
+}
+
+fn check(step: Step, ex: &Exchange, call: &Call) -> AttemptResult {
+    let json = call.docstring.as_deref();
+    match step {
+        Step::ResponseCode => assert::response_code(ex, call.need(0)?),
+        Step::ResponseBodyContainsJson => assert::body_contains_json(ex, json),
+        Step::ResponseBodyEqualsJson => assert::body_equals_json(ex, json),
+        Step::ResponseBodyNotContainsJson => assert::body_not_contains_json(ex, json),
+        Step::ResponseArrayLength => assert::array_length(ex, call.need(0)?),
+        Step::ResponseHeader => assert::response_header(ex, call.need(0)?, call.need(1)?),
+        Step::ResponseHeaderContains => {
+            assert::response_header_contains(ex, call.need(0)?, call.need(1)?, false)
+        }
+        Step::ResponseHeaderNotContains => {
+            assert::response_header_contains(ex, call.need(0)?, call.need(1)?, true)
+        }
+        Step::ResponseHeaderMatches => {
+            assert::response_header_matches(ex, call.need(0)?, call.need(1)?, false)
+        }
+        Step::ResponseHeaderNotMatches => {
+            assert::response_header_matches(ex, call.need(0)?, call.need(1)?, true)
+        }
+        Step::JsonNodeExists => assert::json_node_exists(ex, call.need(0)?),
+        Step::JsonNodeNotExists => assert::json_node_not_exists(ex, call.need(0)?),
+        Step::JsonNodeIsNull => assert::json_node_is_null(ex, call.need(0)?),
+        Step::JsonNodeNotNull => assert::json_node_not_null(ex, call.need(0)?),
+        Step::JsonNodeNotContainsSubstring => {
+            assert::json_node_not_contains(ex, call.need(0)?, call.need(1)?)
+        }
+        Step::ResponseBodyEmpty => assert::body_empty(ex),
+        Step::ResponseBodyContains => assert::body_contains_text(ex, call.need(0)?, false),
+        Step::ResponseBodyNotContains => assert::body_contains_text(ex, call.need(0)?, true),
+        Step::ResponseBodyMatches => assert::body_matches(ex, call.need(0)?, false),
+        Step::ResponseBodyNotMatches => assert::body_matches(ex, call.need(0)?, true),
+        Step::ResponseBodyHasElement => assert::body_has_element(ex, call.need(0)?),
+        Step::ResponseBodyHasElementWithText => {
+            assert::body_has_element_with_text(ex, call.need(0)?, call.need(1)?)
+        }
+        Step::ResponseBodyNotHasElement => assert::body_not_has_element(ex, call.need(0)?),
+        Step::Request
+        | Step::RequestUsing
+        | Step::SetHeader
+        | Step::AddHeader
+        | Step::SetQuery
+        | Step::SetBody
+        | Step::EmptyBody
+        | Step::SetForm
+        | Step::Attach
+        | Step::Hawk => Err(AttemptError::input("the step is not an assertion")),
     }
 }
 
@@ -291,6 +570,109 @@ mod tests {
         let reply = run(Step::RequestUsing, &mut state, &call);
         assert!(reply.json().contains("\"fatal\""));
         assert!(state.recipe.is_none() && state.exchange.is_none());
+    }
+
+    fn state_with_a_request_to(base: &str) -> State {
+        let api = crate::config::Api::parse(&json!({"base_url": base})).expect("valid");
+        let mut state = State::new(std::collections::BTreeMap::from([(
+            "main".to_string(),
+            Some(std::sync::Arc::new(api)),
+        )]));
+        state.begin("main").expect("ok");
+        let (recipe, _) = state.begin_send("GET", "/p").expect("ok");
+        state.recipe = Some(recipe);
+        state
+    }
+
+    fn reply_of(step: Step, state: &mut State, request: &Value) -> Value {
+        serde_json::from_str(&run(step, state, &Call::parse(request)).json()).expect("JSON")
+    }
+
+    #[test]
+    fn a_replay_that_cannot_connect_is_not_yet_transport_and_keeps_the_recipe() {
+        let mut state = state_with_a_request_to("http://127.0.0.1:1/");
+        let v = reply_of(
+            Step::ResponseCode,
+            &mut state,
+            &json!({"args": ["200"], "attempt": 2}),
+        );
+        assert_eq!(v["status"], "not_yet");
+        assert_eq!(v["class"], "transport");
+        assert_eq!(v["options_instance"], "main");
+        assert!(state.exchange.is_none() && state.recipe.is_some());
+    }
+
+    #[test]
+    fn nothing_sent_is_fatal_input_with_the_text_of_the_attempt() {
+        let mut state = state_with_a_request_to("http://127.0.0.1:1/");
+        state.recipe = None;
+        for (attempt, text) in [
+            (1, "no request has been sent yet"),
+            (2, "request has not been sent"),
+        ] {
+            let v = reply_of(
+                Step::ResponseCode,
+                &mut state,
+                &json!({"args": ["200"], "attempt": attempt}),
+            );
+            assert_eq!(
+                (v["status"].as_str(), v["class"].as_str()),
+                (Some("fatal"), Some("input"))
+            );
+            assert_eq!(v["error"], text);
+        }
+    }
+
+    #[test]
+    fn a_mismatch_may_change_and_one_that_cannot_is_fatal_assertion() {
+        let mut state = state_with_a_request_to("http://127.0.0.1:1/");
+        state.exchange = Some(crate::state::Exchange {
+            method: "GET".into(),
+            url: "http://earlier/".into(),
+            request_headers: Vec::new(),
+            request_body: None,
+            request_form: crate::state::BodyForm::Raw,
+            status: 404,
+            response_headers: Vec::new(),
+            response_body: r#"{"n": 1}"#.into(),
+            duration_us: 0,
+            api: "main".into(),
+            sensitive_headers: Vec::new(),
+        });
+        let v = reply_of(Step::ResponseCode, &mut state, &json!({"args": ["200"]}));
+        assert_eq!(
+            (v["status"].as_str(), v["class"].as_str()),
+            (Some("not_yet"), Some("assertion"))
+        );
+        assert_eq!(v["options_instance"], "main");
+        assert!(v["diagnostics"].as_array().is_some_and(Vec::is_empty));
+        let v = reply_of(
+            Step::JsonNodeNotContainsSubstring,
+            &mut state,
+            &json!({"args": ["n", "1"]}),
+        );
+        assert_eq!(
+            (v["status"].as_str(), v["class"].as_str()),
+            (Some("fatal"), Some("assertion"))
+        );
+    }
+
+    #[test]
+    fn a_replay_that_cannot_connect_keeps_what_the_request_registered() {
+        let mut state = state_with_a_request_to("http://127.0.0.1:1/");
+        if let Some(recipe) = state.recipe.as_mut() {
+            recipe
+                .headers
+                .push(("Authorization".into(), "Bearer abc1234".into()));
+            recipe.body = Some(r#"{"token":"t"}"#.into());
+        }
+        let v = reply_of(
+            Step::ResponseCode,
+            &mut state,
+            &json!({"args": ["200"], "attempt": 2}),
+        );
+        assert!(v["secrets"].to_string().contains("abc1234"), "{v}");
+        assert!(v["scan"].to_string().contains(r#"\"token\""#), "{v}");
     }
 
     #[test]
