@@ -1,0 +1,52 @@
+# Its own workspace root on purpose: without this, a parent workspace builds
+# the plugin implicitly and `cargo clippy --all-targets` in the parent sees it.
+[workspace]
+
+[package]
+name = "bddkit-api"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+description = "HTTP API and SRP steps for the bddkit acceptance-testing tool"
+license = "Apache-2.0"
+repository = "https://github.com/bddkit/bddkit-api"
+homepage = "https://github.com/bddkit/bddkit-api"
+readme = "README.md"
+keywords = ["bdd", "gherkin", "testing", "http", "bddkit"]
+categories = ["development-tools::testing"]
+exclude = ["/.github", "/.idea", "/docs"]
+
+[lib]
+# rlib beside the cdylib so `tests/` can call the exports in-process.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+num-bigint = "0.4"
+reqwest = "0.13"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.53", features = ["rt-multi-thread"] }
+
+[dev-dependencies]
+axum = "0.8"
+sha2 = "0.10"
+tokio = { version = "1.53", features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+clone_on_ref_ptr = "warn"
+undocumented_unsafe_blocks = "warn"
+multiple_unsafe_ops_per_block = "warn"
+# noise for this project
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+doc_markdown = "allow"
+format_push_string = "allow"
