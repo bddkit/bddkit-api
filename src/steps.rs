@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use crate::assert::{self, AttemptError, AttemptResult};
 use crate::header;
+use crate::read;
 use crate::reply::{Class, Reply};
 use crate::send;
 use crate::state::{Exchange, State};
@@ -45,9 +46,17 @@ pub enum Step {
     ResponseBodyHasElement,
     ResponseBodyHasElementWithText,
     ResponseBodyNotHasElement,
+    ExtractJson,
+    ExtractJsonGlobal,
+    ExtractCookie,
+    ExtractCookieGlobal,
+    ExtractMarkup,
+    PrintHeaders,
+    PrintBody,
+    PrintBodyAs,
 }
 
-const ALL: [Step; 33] = [
+const ALL: [Step; 41] = [
     Step::Request,
     Step::ResponseCode,
     Step::RequestUsing,
@@ -81,6 +90,14 @@ const ALL: [Step; 33] = [
     Step::ResponseBodyHasElement,
     Step::ResponseBodyHasElementWithText,
     Step::ResponseBodyNotHasElement,
+    Step::ExtractJson,
+    Step::ExtractJsonGlobal,
+    Step::ExtractCookie,
+    Step::ExtractCookieGlobal,
+    Step::ExtractMarkup,
+    Step::PrintHeaders,
+    Step::PrintBody,
+    Step::PrintBodyAs,
 ];
 
 impl Step {
@@ -193,6 +210,38 @@ impl Step {
             Step::ResponseBodyNotHasElement => assert_spec(
                 r#"the response body does not have element "{selector}""#,
                 "asserts no element matches this selector in the response body",
+            ),
+            Step::ExtractJson => read::extract_spec(
+                r#"extract "{path}" from JSON as "{name}""#,
+                "reads a JSON path of the response into a variable",
+            ),
+            Step::ExtractJsonGlobal => read::extract_spec(
+                r#"extract "{path}" from JSON as "{name}" global"#,
+                "reads a JSON path of the response into a variable the whole file can see",
+            ),
+            Step::ExtractCookie => read::extract_spec(
+                r#"extract "{cookie}" from cookies as "{name}""#,
+                "reads a response cookie into a variable",
+            ),
+            Step::ExtractCookieGlobal => read::extract_spec(
+                r#"extract "{cookie}" from cookies as "{name}" global"#,
+                "reads a response cookie into a variable the whole file can see",
+            ),
+            Step::ExtractMarkup => read::extract_spec(
+                r#"extract "{selector}" from response body as "{name}""#,
+                "reads the matched elements' text, newline-joined if more than one, into a variable",
+            ),
+            Step::PrintHeaders => read::print_spec(
+                "Print response headers",
+                "prints the headers of the last response to stderr",
+            ),
+            Step::PrintBody => read::print_spec(
+                "Print response body",
+                "prints the body of the last response to stderr, highlighted",
+            ),
+            Step::PrintBodyAs => read::print_spec(
+                r#"Print response body as "{path}""#,
+                "prints one JSON path, XPath (XML) or CSS selector (HTML) selection of the last response to stderr",
             ),
             Step::SetHeader => build_spec(
                 r#"the "{name}" request header is "{value}""#,
@@ -355,7 +404,49 @@ fn run_step(step: Step, state: &mut State, call: &Call) -> Result<Reply, Reply> 
         | Step::ResponseBodyHasElement
         | Step::ResponseBodyHasElementWithText
         | Step::ResponseBodyNotHasElement => Ok(response_assertion(step, state, call)),
+        Step::ExtractJson => extract(state, call, read::extract_json, false),
+        Step::ExtractJsonGlobal => extract(state, call, read::extract_json, true),
+        Step::ExtractCookie => extract(state, call, read::extract_cookie, false),
+        Step::ExtractCookieGlobal => extract(state, call, read::extract_cookie, true),
+        Step::ExtractMarkup => extract(state, call, read::select, false),
+        Step::PrintHeaders => print(state, |ex| Ok(read::print_headers(ex))),
+        Step::PrintBody => print(state, read::print_body),
+        Step::PrintBodyAs => {
+            let selector = call.arg(0)?;
+            print(state, |ex| read::print_body_as(ex, selector))
+        }
     }
+}
+
+/// The last response, for a step that only reads it. Never replayed.
+fn last_response(state: &State) -> Result<&Exchange, Reply> {
+    state
+        .exchange
+        .as_ref()
+        .ok_or_else(|| Reply::failed(Class::Input, "no request has been sent yet"))
+}
+
+/// `extract "<arg 0>" … as "<name>"`: one value of the response into a variable.
+fn extract(
+    state: &State,
+    call: &Call,
+    read: fn(&Exchange, &str) -> Result<String, read::Failure>,
+    global: bool,
+) -> Result<Reply, Reply> {
+    let ex = last_response(state)?;
+    let (name, from) = (call.arg(1)?, call.arg(0)?);
+    read(ex, from)
+        .map(|value| read::stored(name, value, global))
+        .map_err(|(class, message)| Reply::failed(class, message))
+}
+
+fn print(
+    state: &State,
+    item: impl FnOnce(&Exchange) -> Result<Value, read::Failure>,
+) -> Result<Reply, Reply> {
+    item(last_response(state)?)
+        .map(read::printed)
+        .map_err(|(class, message)| Reply::failed(class, message))
 }
 
 /// Attempt 1 checks the exchange the request left. From attempt 2 the request
@@ -459,7 +550,15 @@ fn check(step: Step, ex: &Exchange, call: &Call) -> AttemptResult {
         | Step::EmptyBody
         | Step::SetForm
         | Step::Attach
-        | Step::Hawk => Err(AttemptError::input("the step is not an assertion")),
+        | Step::Hawk
+        | Step::ExtractJson
+        | Step::ExtractJsonGlobal
+        | Step::ExtractCookie
+        | Step::ExtractCookieGlobal
+        | Step::ExtractMarkup
+        | Step::PrintHeaders
+        | Step::PrintBody
+        | Step::PrintBodyAs => Err(AttemptError::input("the step is not an assertion")),
     }
 }
 
@@ -683,6 +782,9 @@ mod tests {
             let writes = &spec["writes"];
             if text.starts_with("I request") {
                 assert_eq!(writes, &json!(["response"]), "{text}");
+            } else if spec["reads"] == json!(["response"]) {
+                // An extract or a print reads the response and builds nothing.
+                assert!(writes.is_null(), "{text}");
             } else if spec["kind"] == "action" {
                 assert_eq!(writes, &json!(["request"]), "{text}");
             }
