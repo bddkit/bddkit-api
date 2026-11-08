@@ -14,6 +14,7 @@
 
 pub mod barrier;
 pub mod events;
+pub mod ported;
 pub mod stub;
 
 use std::path::{Path, PathBuf};
