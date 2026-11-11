@@ -47,14 +47,15 @@ pub fn temp(name: &str) -> PathBuf {
     dir
 }
 
-/// `bddkit <args>` run in `dir`: no terminal, `dir` as home, and the local
-/// plugin index.
+/// `bddkit <args>` run in `dir`: no terminal, `dir` as home, and a plugin index
+/// nobody serves, so a command that still asks it fails the test: `init` knows
+/// an installed plugin without the index (bddkit/bddkit#227).
 pub fn in_dir(bin: &Path, dir: &Path, args: &[&str]) -> Output {
     command(bin, args)
         .current_dir(dir)
         .stdin(Stdio::null())
         .env("HOME", dir)
-        .env("BDDKIT_PLUGIN_REGISTRY", registry_url())
+        .env("BDDKIT_PLUGIN_REGISTRY", "http://127.0.0.1:1/registry.yaml")
         .env_remove("CI")
         .output()
         .expect("bddkit")
@@ -118,30 +119,4 @@ impl Suite {
         assert_eq!(all.len(), 1, "one payload per run: {all:?}");
         all.remove(0)
     }
-}
-
-/// The URL of a one-entry plugin index naming this plugin's groups, served
-/// from a thread of this process. `init` asks the index which plugins a config
-/// needs, and an installed plugin has to be found in it to count as satisfied.
-pub fn registry_url() -> &'static str {
-    use std::io::{Read, Write};
-    static URL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    URL.get_or_init(|| {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        let url = format!("http://{}/registry.yaml", listener.local_addr().expect("addr"));
-        let body = "plugin:\n  - name: api\n    repo: bddkit/bddkit-api\n    groups: [api, srp]\n    description: HTTP API and SRP\n    abi:\n      \"4\": 0.1.0\n";
-        std::thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
-                let mut stream = stream;
-                let mut request = [0u8; 2048];
-                let _ = stream.read(&mut request);
-                let _ = write!(
-                    stream,
-                    "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-            }
-        });
-        url
-    })
 }
