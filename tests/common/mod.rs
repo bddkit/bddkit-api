@@ -49,26 +49,31 @@ pub fn root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// Builds the plugin once and writes a lock file for it into a directory
+/// Builds the plugin once (or takes `BDDKIT_API_LIBRARY`) and writes a lock file for it into a directory
 /// handed to `--bddkit-dir`.
 pub fn lock_dir() -> &'static Path {
     static DIR: OnceLock<PathBuf> = OnceLock::new();
     DIR.get_or_init(|| {
-        let out = Command::new(env!("CARGO"))
-            .arg("build")
-            .current_dir(root())
-            .output()
-            .expect("cargo build");
-        assert!(
-            out.status.success(),
-            "plugin build failed:\n{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        let library = root().join("target/debug").join(format!(
-            "{}bddkit_api{}",
-            std::env::consts::DLL_PREFIX,
-            std::env::consts::DLL_SUFFIX
-        ));
+        // The release gate runs the library a release archive carries, not a build.
+        let library = if let Some(library) = std::env::var_os("BDDKIT_API_LIBRARY") {
+            PathBuf::from(library)
+        } else {
+            let out = Command::new(env!("CARGO"))
+                .arg("build")
+                .current_dir(root())
+                .output()
+                .expect("cargo build");
+            assert!(
+                out.status.success(),
+                "plugin build failed:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            root().join("target/debug").join(format!(
+                "{}bddkit_api{}",
+                std::env::consts::DLL_PREFIX,
+                std::env::consts::DLL_SUFFIX
+            ))
+        };
         let dir = std::env::temp_dir().join(format!("bddkit-api-e2e-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("mkdir");
         std::fs::write(
