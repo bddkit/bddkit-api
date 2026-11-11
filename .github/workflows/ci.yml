@@ -12,6 +12,9 @@ env:
   CARGO_TERM_COLOR: always
   # The host the plugin is tested against: a candidate. Raise it when a newer one is out.
   HOST_TAG: v0.5.0-rc.3
+  # The release the gate runs: the archive users install, not a build of the
+  # checkout. Raise it with each candidate; a fix reaches the gate in the next one.
+  PLUGIN_TAG: v0.1.0-rc.1
 
 jobs:
   test:
@@ -80,6 +83,70 @@ jobs:
           mkdir -p "$lock"
           printf 'plugin:\n  - name: api\n    path: %s/target/debug/libbddkit_api.so\n' "$PWD" > "$lock/plugins.yaml"
           "$BDDKIT_BIN" run --config examples/api.yaml --bddkit-dir "$lock"
+
+  # The release gate (bddkit-api#20): the core's suites at `pre-split`, unmodified,
+  # on the candidate host with the released plugin. A failure is a bug in the
+  # plugin or the host, fixed there, never a change to those files.
+  pre-split-gate:
+    name: pre-split gate
+    runs-on: ubuntu-latest
+    services:
+      smocker:
+        image: ghcr.io/smocker-dev/smocker:v1.1.2-preview
+        ports:
+          - 8080:8080
+          - 8081:8081
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6
+        with:
+          repository: bddkit/bddkit
+          # The commit of the `pre-split` tag: a tag can be moved, the gate must not follow it.
+          ref: 0020b83a42418aef3aa6414e99f5e4c058254931
+          path: pre-split
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: "1.97.1"
+          rustflags: ""
+      - name: Cache the host
+        id: host
+        uses: actions/cache@v4
+        with:
+          path: ~/bddkit-host
+          key: bddkit-host-${{ env.HOST_TAG }}
+      - name: Install the host
+        if: steps.host.outputs.cache-hit != 'true'
+        run: >-
+          cargo install --git https://github.com/bddkit/bddkit --tag "$HOST_TAG"
+          --locked --root ~/bddkit-host bddkit
+      - name: Fetch the released plugin
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$HOME/plugin"
+          gh release download "$PLUGIN_TAG" --repo bddkit/bddkit-api \
+            --pattern '*x86_64-unknown-linux-gnu.tar.gz*' --dir "$HOME/plugin"
+          (cd "$HOME/plugin" && sha256sum -c ./*.sha256)
+          tar -xzf "$HOME"/plugin/*.tar.gz -C "$HOME/plugin"
+          library=$(ls "$HOME"/plugin/*/libbddkit_api.so)
+          echo "BDDKIT_API_LIBRARY=$library" >> "$GITHUB_ENV"
+      # Both tests panic without PRE_SPLIT_DIR and count the files they ran.
+      - name: API and core suites against the stub
+        run: |
+          export BDDKIT_BIN="$HOME/bddkit-host/bin/bddkit"
+          export PRE_SPLIT_DIR="$PWD/pre-split"
+          cargo test --locked --test pre_split_gate -- --ignored
+      - name: API examples against smocker
+        run: |
+          bddkit="$HOME/bddkit-host/bin/bddkit"
+          for _ in $(seq 30); do curl -fs http://127.0.0.1:8081/version && break; sleep 1; done
+          curl -fsS -X POST -H 'Content-Type: application/x-yaml' \
+            --data-binary @pre-split/examples/mocks/api-server.yaml 'http://127.0.0.1:8081/mocks?reset=true'
+          lock="$RUNNER_TEMP/lock"
+          mkdir -p "$lock"
+          printf 'plugin:\n  - name: api\n    path: %s\n' "$BDDKIT_API_LIBRARY" > "$lock/plugins.yaml"
+          cd pre-split
+          time "$bddkit" run --config examples/api.yaml --bddkit-dir "$lock"
 
   # The unit tests on the five release targets; the subprocess tests need the
   # host and run on Linux above.
