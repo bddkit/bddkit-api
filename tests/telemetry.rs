@@ -50,3 +50,19 @@ fn doctor_counts_the_api_instances_under_the_plugin() {
         serde_json::json!({"api": 2})
     );
 }
+
+// core: a_resource_the_host_cannot_build_reports_the_resources_stage. The
+// plugin refuses `timeout_secs: 0`, and the stage is `resources`, not
+// `plugins` (bddkit/bddkit#225).
+#[test]
+fn an_instance_the_plugin_refuses_reports_the_resources_stage() {
+    let bin = require_bddkit!();
+    let suite = Suite::new(
+        "resources-stage",
+        "paths: [features]\nresources:\n  api:\n    stub:\n      base_url: http://127.0.0.1:9\n      timeout_secs: 0\n",
+        OFFICIAL,
+    );
+    let out = suite.bddkit(&bin, &["run", "--telemetry", "true"]);
+    assert_eq!(out.status.code(), Some(2), "{}", combined(&out));
+    assert_eq!(suite.only_payload()["stage"], "resources");
+}

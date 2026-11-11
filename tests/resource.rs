@@ -11,7 +11,7 @@
 mod common;
 
 use common::ported::path;
-use common::{CLOSED, PING, api_project, bddkit, combined, project};
+use common::{CLOSED, PING, api_project, bddkit, combined, command, project};
 
 fn config() -> std::path::PathBuf {
     project("fields-listing", PING, "  api: {}\n  srp: {}\n", "")
@@ -187,4 +187,40 @@ fn resource_add_masks_the_block_it_prints() {
     assert!(text.contains("The block, for manual insertion"), "{text}");
     assert!(text.contains("app:***@127.0.0.1"), "{text}");
     assert!(!text.contains("add-pass-5678"), "{text}");
+}
+
+/// A resource name is written to the file literally and read back `${VAR}`-
+/// expanded, so a name carrying a variable that is set is not in the loaded
+/// config under the name being written. That is a refusal like any other: for
+/// a plugin's group the host used to write the literal key and exit 0.
+// core: resource_add_refuses_a_name_that_expands_to_something_else
+#[test]
+fn resource_add_refuses_a_name_that_expands_to_something_else() {
+    let bin = require_bddkit!();
+    let (config, before) = dead("resource-add-expanding-name");
+    let out = command(
+        &bin,
+        &[
+            "resource",
+            "add",
+            "api",
+            "${BDDKIT_TEST_NAME}",
+            "--config",
+            path(&config),
+            "--base_url",
+            "http://a.local",
+            "--no-check",
+        ],
+    )
+    .env("BDDKIT_TEST_NAME", "expanded")
+    .output()
+    .expect("bddkit");
+    let text = combined(&out);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(text.contains("${VAR}"), "{text}");
+    assert_eq!(
+        std::fs::read_to_string(&config).expect("read config"),
+        before,
+        "nothing was written"
+    );
 }
