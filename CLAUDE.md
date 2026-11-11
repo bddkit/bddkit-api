@@ -30,6 +30,6 @@ The authoring contract is `docs/plugin-authoring.md` in the `bddkit/bddkit` repo
 
 - Edition 2024, `rust-version` 1.97 (CI pins the toolchain). Dependency versions are not bumped without being asked.
 - `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` must be clean; no file over 1,000 lines.
-- The end-to-end tests drive a real `bddkit` built with `--features dev-unreserve`: `BDDKIT_BIN=/path/to/bddkit cargo test`. A red feature file is a real bug: never weaken one to force green.
+- The end-to-end tests drive a real `bddkit`: `BDDKIT_BIN=/path/to/bddkit cargo test`. A red feature file is a real bug: never weaken one to force green.
 - Everything in the repository is English: code, comments, error messages, documentation. Conversational replies follow the operator's language.
 - Markdown is never soft-wrapped: one paragraph or list item is one physical line.
