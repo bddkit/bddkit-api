@@ -21,7 +21,7 @@ resources:
 
 ## Steps
 
-`bddkit steps list api --config <suite>` and `bddkit steps list srp --config <suite>` print every step the two groups add; `--filter <text>` narrows the list and `-v` adds a line of description under each step. They cover building a request (headers, query, body, form, `I attach the file`), sending it, the response assertions (status, headers, JSON, XML and HTML bodies, cookies, with the eventual forms that poll), reading the response (`extract … from JSON`, `from cookies`, `Print response …`), signing the next request with Hawk, and the four SRP steps.
+`bddkit steps list api --config <suite>` and `bddkit steps list srp --config <suite>` print every step the two groups add; `--filter <text>` narrows the list and `-v` adds a line of description under each step. They cover building a request (headers, query, body, form, `I attach the file`), sending it, the response assertions (status, headers, JSON, XML and HTML bodies, with the eventual forms that poll), reading the response (`extract … from JSON`, `from cookies`, `Print response …`), signing the next request with Hawk, and the four SRP steps.
 
 ### Uploading a file
 
@@ -39,7 +39,7 @@ The path is relative to the feature file the step is written in, and `<<variable
 
 ## Config
 
-Keys of an `api` resource: `base_url` (required), `timeout_secs`, `default_headers`, `sensitive_headers`, `sensitive_headers_only` and `options` (`polling.timeout_secs` / `polling.interval_ms` for the eventual assertions sent to this API). A scenario reaches any API by name with `I use "<name>" api`; the first one, or `default_api`, is current at the start of every scenario. An `srp` resource takes `variant` (required), `prime`, `generator` and `hash`.
+Keys of an `api` resource: `base_url` (required), `timeout_secs`, `default_headers`, `sensitive_headers`, `sensitive_headers_only` and `options` (`polling.timeout_secs` / `polling.interval_ms` for the eventual assertions sent to this API). A scenario reaches any API by name with `I use "<name>" api`; the one instance, or `default_api` when there are several, is current at the start of every scenario. An `srp` resource takes `variant` (required), `prime`, `generator` and `hash`.
 
 ## Privacy
 

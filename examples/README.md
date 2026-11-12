@@ -7,7 +7,7 @@ mkdir -p /tmp/lock
 printf 'plugin:\n  - name: api\n    path: %s/target/debug/libbddkit_api.so\n' "$PWD" > /tmp/lock/plugins.yaml
 ```
 
-and pass `--bddkit-dir /tmp/lock` to `bddkit run`. Once the plugin is released, `bddkit plugin install api` does the same.
+and pass `--bddkit-dir /tmp/lock` to `bddkit run`. `bddkit plugin install api` installs a release instead.
 
 ## The suite
 
