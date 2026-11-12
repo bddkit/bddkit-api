@@ -10,8 +10,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # The host the plugin is tested against: a candidate. Raise it when a newer one is out.
-  HOST_TAG: v0.5.0-rc.3
+  # The host the plugin is tested against: a bddkit release. Raise it when a newer one is out.
+  HOST_TAG: v0.5.0
   # The release the gate runs: the archive users install, not a build of the
   # checkout. Raise it with each candidate; a fix reaches the gate in the next one.
   PLUGIN_TAG: v0.1.0-rc.1
@@ -85,8 +85,8 @@ jobs:
           "$BDDKIT_BIN" run --config examples/api.yaml --bddkit-dir "$lock"
 
   # The release gate (bddkit-api#20): the core's suites at `pre-split`, unmodified,
-  # on the candidate host with the released plugin. A failure is a bug in the
-  # plugin or the host, fixed there, never a change to those files.
+  # on the host with the released plugin. A failure is a bug in the plugin or
+  # the host, fixed there, never a change to those files.
   pre-split-gate:
     name: pre-split gate
     runs-on: ubuntu-latest
