@@ -52,7 +52,7 @@ The plugin sends the real values and says which of them are sensitive; bddkit hi
 
 ## Tests
 
-The tests drive a real `bddkit` binary, `v0.5.0-rc.3` or newer:
+The tests drive a real `bddkit` binary, `v0.5.0` or newer:
 
 ```sh
 BDDKIT_BIN=/path/to/bddkit cargo test

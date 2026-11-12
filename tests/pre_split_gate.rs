@@ -1,5 +1,5 @@
 //! The release gate (bddkit-api#20): the core's suites as they were at the
-//! `pre-split` tag pass, unmodified, on the candidate host with this plugin.
+//! `pre-split` tag pass, unmodified, on the host with this plugin.
 //! `PRE_SPLIT_DIR` is a checkout of `bddkit/bddkit` at that tag's commit. The tests are
 //! `#[ignore]`d so a plain `cargo test` does not need it, and they panic
 //! without it so the gate job can never go green by running nothing.

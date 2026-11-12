@@ -31,6 +31,6 @@ The authoring contract is `docs/plugin-authoring.md` in the `bddkit/bddkit` repo
 - Edition 2024, `rust-version` 1.97 (CI pins the toolchain). Dependency versions are not bumped without being asked.
 - `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` must be clean; no file over 1,000 lines.
 - The end-to-end tests drive a real `bddkit`: `BDDKIT_BIN=/path/to/bddkit cargo test`. A red feature file is a real bug: never weaken one to force green.
-- `tests/pre_split_gate.rs` and CI's `pre-split gate` job are the release gate: the core's suites at the commit of the `pre-split` tag (checked out beside, never copied here) run unmodified on the host candidate with the RELEASED plugin (`PLUGIN_TAG`). A failure is a bug in the plugin or the host, never a reason to touch those files. Locally: `PRE_SPLIT_DIR=<checkout> BDDKIT_BIN=<host> cargo test --test pre_split_gate -- --ignored`.
+- `tests/pre_split_gate.rs` and CI's `pre-split gate` job are the release gate: the core's suites at the commit of the `pre-split` tag (checked out beside, never copied here) run unmodified on the host with the RELEASED plugin (`PLUGIN_TAG`). A failure is a bug in the plugin or the host, never a reason to touch those files. Locally: `PRE_SPLIT_DIR=<checkout> BDDKIT_BIN=<host> cargo test --test pre_split_gate -- --ignored`.
 - Everything in the repository is English: code, comments, error messages, documentation. Conversational replies follow the operator's language.
 - Markdown is never soft-wrapped: one paragraph or list item is one physical line.

@@ -1,6 +1,6 @@
 //! What every end-to-end test binary shares: the host, the plugin built for
 //! it, and the lock directory that ties the two. `BDDKIT_BIN` names a `bddkit`
-//! (`v0.5.0-rc.3` or newer). Without it the tests skip, except
+//! (`v0.5.0` or newer). Without it the tests skip, except
 //! under `CI`, where a missing host is a failure: a skipped suite must never
 //! look green there.
 
@@ -38,7 +38,7 @@ macro_rules! require_bddkit {
                 panic!("BDDKIT_BIN does not name a bddkit binary, and CI must not skip")
             }
             None => {
-                eprintln!("SKIP: set BDDKIT_BIN to a bddkit v0.5.0-rc.3 or newer");
+                eprintln!("SKIP: set BDDKIT_BIN to a bddkit v0.5.0 or newer");
                 return;
             }
         }
