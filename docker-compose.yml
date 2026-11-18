@@ -1,0 +1,16 @@
+services:
+  # The mock server the examples and tests use; same image and ports as the
+  # `services:` of .github/workflows/ci.yml. The mocks are seeded at startup,
+  # so `docker compose restart smocker` reloads them and resets the polling
+  # counter of /jobs/1. No healthcheck: the image is `FROM scratch`, it has no
+  # shell, wget or curl to probe with. Wait from the host instead:
+  #   until curl -fs http://127.0.0.1:8081/version; do sleep 1; done
+  smocker:
+    image: ghcr.io/smocker-dev/smocker:v1.1.2-preview
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    environment:
+      SMOCKER_INIT_MOCKS: /mocks/api-server.yaml
+    volumes:
+      - ./examples/mocks:/mocks:ro

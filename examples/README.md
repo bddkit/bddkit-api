@@ -14,11 +14,13 @@ and pass `--bddkit-dir /tmp/lock` to `bddkit run`. `bddkit plugin install api` i
 Talks to a local [Smocker](https://github.com/smocker-dev/smocker) instance, so the suite runs offline and its responses are fixed by a file in this repo.
 
 ```bash
-docker run -d --name smocker -p 8080:8080 -p 8081:8081 -e SMOCKER_INIT_MOCKS=/mocks/api-server.yaml -v "$PWD/examples/mocks:/mocks:ro" ghcr.io/smocker-dev/smocker:v1.1.2-preview
+docker compose up -d
 bddkit run --config examples/api.yaml --bddkit-dir /tmp/lock
 ```
 
-The mocks live in `examples/mocks/api-server.yaml` and are seeded into Smocker at startup — after editing them, `docker restart smocker` reloads. Smocker's web UI (mocks, request history) is on <http://localhost:8081>; the mocked API itself is on <http://localhost:8080>.
+The mocks live in `examples/mocks/api-server.yaml` and are seeded into Smocker at startup — after editing them, `docker compose restart smocker` reloads. Smocker's web UI (mocks, request history) is on <http://localhost:8081>; the mocked API itself is on <http://localhost:8080>.
+
+Without Compose, the same container is `docker run -d --name smocker -p 8080:8080 -p 8081:8081 -e SMOCKER_INIT_MOCKS=/mocks/api-server.yaml -v "$PWD/examples/mocks:/mocks:ro" ghcr.io/smocker-dev/smocker:v1.1.2-preview`; reload it with `docker restart smocker`. The image has no shell, so the compose file has no healthcheck: Smocker is ready when `curl -fs http://127.0.0.1:8081/version` answers.
 
 | File | What it demonstrates |
 |---|---|
@@ -32,7 +34,7 @@ The mocks live in `examples/mocks/api-server.yaml` and are seeded into Smocker a
 | `features/eventual.feature` | An assertion polled until it passes; a number written with or without quotes (`I sleep 0 seconds` / `I sleep "0" seconds`) |
 | `features/include_setup.feature` + `features/include_caller.feature` | `I include "<file>" scenario "<name>"`, a Scenario Outline included with a `with:` table, `@exports` isolation — an unexported variable set inside the included scenario does not exist in the caller — and `with prefix "<p>"`, including the same flow twice without the second call's exports overwriting the first's. Neither file makes an HTTP request, so this pair also runs with no Smocker container: `bddkit run --config examples/api.yaml --bddkit-dir /tmp/lock examples/features/include_setup.feature examples/features/include_caller.feature` |
 
-`eventual.feature` is only interesting on a fresh mock session: `/jobs/1` answers "pending" twice and then "done", and Smocker keeps that counter until the container restarts. Run `docker restart smocker` to see the polling actually retry — on a session where the job is already done, the assertion just passes on its first attempt.
+`eventual.feature` is only interesting on a fresh mock session: `/jobs/1` answers "pending" twice and then "done", and Smocker keeps that counter until the container restarts. Run `docker compose restart smocker` to see the polling actually retry — on a session where the job is already done, the assertion just passes on its first attempt.
 
 ## Narrowing a run
 
