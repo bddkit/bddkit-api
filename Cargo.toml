@@ -4,7 +4,7 @@
 
 [package]
 name = "bddkit-api"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.97"
 description = "HTTP API and SRP steps for the bddkit acceptance-testing tool"
