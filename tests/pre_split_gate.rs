@@ -22,11 +22,17 @@ fn pre_split_dir() -> PathBuf {
     PathBuf::from(dir)
 }
 
-/// `bddkit run --config <config>` inside the checkout, whose paths are relative.
-fn run_suite(config: &str, stub: Option<&str>, files: usize) {
+/// `bddkit run --config <config>` inside the checkout. The pinned configs name
+/// `paths` and `macro_paths` from the checkout root, which a 0.6.0 host reads from
+/// the config's folder: the same lists go in the environment, which replaces the
+/// config's and is read from the working directory. The files stay unmodified.
+fn run_suite(config: &str, paths: &str, macro_paths: &str, stub: Option<&str>, files: usize) {
     let bin = require_bddkit!();
     let mut command = common::command(&bin, &["run", "--config", config]);
-    command.current_dir(pre_split_dir());
+    command
+        .current_dir(pre_split_dir())
+        .env("BDDKIT_PATHS", paths)
+        .env("BDDKIT_MACRO_PATHS", macro_paths);
     if let Some(stub) = stub {
         command.env("BDDKIT_STUB_URL", stub);
     }
@@ -46,9 +52,17 @@ fn run_suite(config: &str, stub: Option<&str>, files: usize) {
 async fn pre_split_api_features_pass_against_the_stub() {
     let base = common::stub::spawn().await;
     // Blocking `Command::output` on the runtime's thread would starve the stub.
-    tokio::task::spawn_blocking(move || run_suite("tests/api/acceptance.yaml", Some(&base), 8))
-        .await
-        .expect("join");
+    tokio::task::spawn_blocking(move || {
+        run_suite(
+            "tests/api/acceptance.yaml",
+            "tests/api/features",
+            "tests/macros,tests/api/macros",
+            Some(&base),
+            8,
+        );
+    })
+    .await
+    .expect("join");
 }
 
 /// The core's own scenarios (includes, variables) with the plugin installed:
@@ -56,5 +70,11 @@ async fn pre_split_api_features_pass_against_the_stub() {
 #[test]
 #[ignore = "release gate: needs PRE_SPLIT_DIR"]
 fn pre_split_core_features_pass_with_the_plugin_installed() {
-    run_suite("tests/acceptance.yaml", None, 13);
+    run_suite(
+        "tests/acceptance.yaml",
+        "tests/features",
+        "tests/macros",
+        None,
+        13,
+    );
 }

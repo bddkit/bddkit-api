@@ -11,7 +11,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   # The host the plugin is tested against: a bddkit release. Raise it when a newer one is out.
-  HOST_TAG: v0.5.0
+  HOST_TAG: v0.6.0
   # The release the gate runs: the archive users install, not a build of the
   # checkout. Raise it with each candidate; a fix reaches the gate in the next one.
   PLUGIN_TAG: v0.1.0-rc.1
@@ -136,7 +136,12 @@ jobs:
           export BDDKIT_BIN="$HOME/bddkit-host/bin/bddkit"
           export PRE_SPLIT_DIR="$PWD/pre-split"
           cargo test --locked --test pre_split_gate -- --ignored
+      # The pinned config names its paths from the checkout root, which a 0.6.0
+      # host reads from the config's folder; the variables replace its lists.
       - name: API examples against smocker
+        env:
+          BDDKIT_PATHS: examples/features
+          BDDKIT_MACRO_PATHS: examples/macros
         run: |
           bddkit="$HOME/bddkit-host/bin/bddkit"
           for _ in $(seq 30); do curl -fs http://127.0.0.1:8081/version && break; sleep 1; done

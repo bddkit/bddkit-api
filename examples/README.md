@@ -1,6 +1,6 @@
 # Running the examples
 
-One suite, `examples/api.yaml`, run by a `bddkit` that has this plugin installed. Build the plugin with `cargo build`, then point the host at it with a lock directory:
+One suite, `examples/api.yaml`, run by a `bddkit` 0.6.0 or newer that has this plugin installed. Build the plugin with `cargo build`, then point the host at it with a lock directory:
 
 ```bash
 mkdir -p /tmp/lock

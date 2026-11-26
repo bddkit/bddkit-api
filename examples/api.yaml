@@ -1,5 +1,5 @@
-paths: [examples/features]
-macro_paths: [examples/macros]
+paths: [features]
+macro_paths: [macros]
 
 resources:
   api:
