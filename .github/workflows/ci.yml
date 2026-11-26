@@ -14,7 +14,7 @@ env:
   HOST_TAG: v0.6.0
   # The release the gate runs: the archive users install, not a build of the
   # checkout. Raise it with each candidate; a fix reaches the gate in the next one.
-  PLUGIN_TAG: v0.1.0-rc.1
+  PLUGIN_TAG: v0.1.0
 
 jobs:
   test:
