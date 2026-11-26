@@ -1,5 +1,5 @@
-macro_paths: [tests/api/macros]
-paths: [tests/api/features]
+macro_paths: [macros]
+paths: [features]
 
 resources:
   api:
